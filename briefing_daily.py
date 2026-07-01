@@ -18,13 +18,30 @@ import json
 import os
 from datetime import date
 
+from .config import AgentConfig, Mode
 from .daily_briefing import build_card, render_briefing
 from .run_daily import fetch_sentiment_rows, fetch_spy_today, _already_recorded
 from .forward_paper import record_day
+from .screener import run_screen, render_screen_section
+from .trade_plan import build_plan, write_plan, render_plan
 
 HERE = os.path.dirname(__file__)
 WATCHLIST = ["AAPL", "AMZN", "MSFT", "GOOGL", "NKE", "TSLA"]
 BRIEF_DIR = os.path.join(HERE, "data", "briefings")
+
+# ---- THE SWITCH ----
+# PAPER (default): the daily run produces research + paper tickets only. Nothing
+# is live. Flip to Mode.LIVE and live_trading_armed=True ONLY deliberately, and
+# only after a strategy earns it in the forward-paper ledger. Even armed, the bot
+# never places orders — arming just makes the tickets live-ready for YOU to place
+# (python -m trading_agent.show_tickets). Set your own account number here or via
+# the TRADING_ACCOUNT_NUMBER env var; keep it out of the public repo.
+TRADE_CONFIG = AgentConfig(
+    account_number=os.environ.get("TRADING_ACCOUNT_NUMBER", "PAPER-ACCOUNT"),
+    mode=Mode.PAPER,
+    live_trading_armed=False,
+)
+DOLLARS_PER_TRADE = 200.0
 
 
 def _prices_for(symbol: str):
@@ -80,19 +97,29 @@ def generate_briefing(spy_signal: str) -> str:
     for sym in WATCHLIST:
         cards.append(build_card(sym, _prices_for(sym), earn.get(sym),
                                 sent.get(sym), today))
+
+    # Deterministic screen -> research section appended to the public briefing.
+    candidates = run_screen(cards)
     brief = render_briefing(cards, spy_signal, today)
+    brief += "\n\n" + render_screen_section(candidates) + "\n" + "#" * 60
 
     os.makedirs(BRIEF_DIR, exist_ok=True)
     path = os.path.join(BRIEF_DIR, f"briefing_{today}.txt")
     with open(path, "w") as f:
         f.write(brief)
-    return brief, path
+    return brief, path, candidates
 
 
 def main() -> None:
     signal = run_strategy_record()
-    brief, path = generate_briefing(signal)
+    brief, path, candidates = generate_briefing(signal)
     print(brief)
+
+    # Executable, risk-checked tickets -> PRIVATE (git-ignored), never published.
+    plan = build_plan(candidates, TRADE_CONFIG, dollars_per_trade=DOLLARS_PER_TRADE)
+    plan_path = write_plan(plan)
+    print("\n" + render_plan(plan))
+    print(f"\nPrivate plan: {plan_path}")
     print(f"\nSaved: {path}")
 
 
