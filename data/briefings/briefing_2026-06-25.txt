@@ -1,0 +1,21 @@
+############################################################
+DAILY BRIEFING — 2026-06-25   (information, not advice)
+############################################################
+
+STRATEGY SIGNAL (SPY intraday momentum, paper):
+  SPY data unavailable today; no strategy record.
+
+WATCHLIST (ranked by what's notable today):
+------------------------------------------------------------
+NKE    $41.82      0% of range  [near 52w LOW]
+        beat rate 100%
+GOOGL  $345.29     76% of range  [WSB rising]
+        beat rate 100% | WSB 55 mentions (+45%), rising — watch for crowding
+AAPL   $293.08     81% of range
+        beat rate 100%
+TSLA   n/a         range n/a
+        WSB 25 mentions (-61%), fading — attention cooling
+------------------------------------------------------------
+Reminder: crowd spikes are a RISK flag, not a buy signal. Earnings
+dates mean volatility, not direction. You decide and place trades.
+############################################################
