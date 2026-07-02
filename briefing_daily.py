@@ -24,6 +24,7 @@ from .run_daily import fetch_sentiment_rows, fetch_spy_today, _already_recorded
 from .forward_paper import record_day
 from .screener import run_screen, render_screen_section
 from .trade_plan import build_plan, write_plan, render_plan
+from .universe import scan_universe, render_universe_section
 
 HERE = os.path.dirname(__file__)
 WATCHLIST = ["AAPL", "AMZN", "MSFT", "GOOGL", "NKE", "TSLA"]
@@ -100,8 +101,12 @@ def generate_briefing(spy_signal: str) -> str:
 
     # Deterministic screen -> research section appended to the public briefing.
     candidates = run_screen(cards)
+    # Same screen over the broad universe -> names you don't already follow.
+    universe_hits = scan_universe(sent, exclude=frozenset(WATCHLIST))
     brief = render_briefing(cards, spy_signal, today)
-    brief += "\n\n" + render_screen_section(candidates) + "\n" + "#" * 60
+    brief += "\n\n" + render_screen_section(candidates)
+    brief += "\n\n" + render_universe_section(universe_hits) + "\n" + "#" * 60
+    candidates = candidates + universe_hits
 
     os.makedirs(BRIEF_DIR, exist_ok=True)
     path = os.path.join(BRIEF_DIR, f"briefing_{today}.txt")
