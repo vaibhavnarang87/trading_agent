@@ -3,21 +3,21 @@ DAILY BRIEFING — 2026-07-02   (information, not advice)
 ############################################################
 
 STRATEGY SIGNAL (SPY intraday momentum, paper):
-  SPY session incomplete (4 bars); no record yet.
+  SPY 2026-07-02: first30 +0.670% -> LONG (euphoria=False)
 
 WATCHLIST (ranked by what's notable today):
 ------------------------------------------------------------
-AAPL   $306.20     92% of range  [near 52w HIGH]
+AAPL   $308.63     94% of range  [near 52w HIGH]
         beat rate 100%
-NKE    $44.04      9% of range  [near 52w LOW]
+NKE    $44.09      9% of range  [near 52w LOW]
         beat rate 100%
-AMZN   $245.36     61% of range
+AMZN   $242.67     58% of range
         beat rate 86%
-MSFT   $389.23     20% of range
+MSFT   $390.49     20% of range
         beat rate 100%
-GOOGL  $359.44     81% of range
+GOOGL  $359.91     81% of range
         beat rate 100%
-TSLA   $395.41     52% of range
+TSLA   $393.45     51% of range
 ------------------------------------------------------------
 Reminder: crowd spikes are a RISK flag, not a buy signal. Earnings
 dates mean volatility, not direction. You decide and place trades.
@@ -25,19 +25,19 @@ dates mean volatility, not direction. You decide and place trades.
 
 SCREEN — quality-dip candidates flagged for review (research, not advice):
 ------------------------------------------------------------
-MSFT   $389.23     beaten down (20% of 52w range <= 30%); quality earnings (beat rate 100% >= 75%)
-NKE    $44.04      beaten down (9% of 52w range <= 30%); quality earnings (beat rate 100% >= 75%)
+MSFT   $390.49     beaten down (20% of 52w range <= 30%); quality earnings (beat rate 100% >= 75%)
+NKE    $44.09      beaten down (9% of 52w range <= 30%); quality earnings (beat rate 100% >= 75%)
 ------------------------------------------------------------
 A screen hit is a prompt to do your own research, not a recommendation
 to buy. Criteria are fixed and shown above; you decide and place trades.
 
 UNIVERSE SCAN — quality dips beyond the watchlist (research, not advice):
 ------------------------------------------------------------
-ACN    $136.08     beaten down (7% of 52w range <= 30%); quality earnings (beat rate 100% >= 75%); outside watchlist (universe scan)
-ADBE   $217.70     beaten down (13% of 52w range <= 30%); quality earnings (beat rate 100% >= 75%); outside watchlist (universe scan)
-AMT    $168.39     beaten down (8% of 52w range <= 30%); quality earnings (beat rate 75% >= 75%); outside watchlist (universe scan)
-CMCSA  $23.43      beaten down (14% of 52w range <= 30%); quality earnings (beat rate 100% >= 75%); outside watchlist (universe scan)
-CME    $235.54     beaten down (17% of 52w range <= 30%); quality earnings (beat rate 75% >= 75%); outside watchlist (universe scan)
+ACN    $137.35     beaten down (7% of 52w range <= 30%); quality earnings (beat rate 100% >= 75%); outside watchlist (universe scan)
+ADBE   $219.72     beaten down (14% of 52w range <= 30%); quality earnings (beat rate 100% >= 75%); outside watchlist (universe scan)
+AMT    $166.03     beaten down (4% of 52w range <= 30%); quality earnings (beat rate 75% >= 75%); outside watchlist (universe scan)
+CMCSA  $23.79      beaten down (17% of 52w range <= 30%); quality earnings (beat rate 100% >= 75%); outside watchlist (universe scan)
+CME    $236.60     beaten down (18% of 52w range <= 30%); quality earnings (beat rate 75% >= 75%); outside watchlist (universe scan)
 ------------------------------------------------------------
 Scanned ~104 large caps with fixed, shown criteria. A hit
 is a research prompt, not a recommendation. You decide and place trades.
