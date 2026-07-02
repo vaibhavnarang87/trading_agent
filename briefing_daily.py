@@ -31,16 +31,18 @@ WATCHLIST = ["AAPL", "AMZN", "MSFT", "GOOGL", "NKE", "TSLA"]
 BRIEF_DIR = os.path.join(HERE, "data", "briefings")
 
 # ---- THE SWITCH ----
-# PAPER (default): the daily run produces research + paper tickets only. Nothing
-# is live. Flip to Mode.LIVE and live_trading_armed=True ONLY deliberately, and
-# only after a strategy earns it in the forward-paper ledger. Even armed, the bot
-# never places orders — arming just makes the tickets live-ready for YOU to place
-# (python -m trading_agent.show_tickets). Set your own account number here or via
-# the TRADING_ACCOUNT_NUMBER env var; keep it out of the public repo.
+# Armed by ENVIRONMENT, never by code: the committed default is always PAPER,
+# so the public repo and the nightly CI job can never produce live-armed
+# tickets. To arm on YOUR machine only:
+#     export TRADING_GO_LIVE=1
+#     export TRADING_ACCOUNT_NUMBER=...   # your account, never committed
+# Even armed, this pipeline never places orders — arming makes tickets
+# live-ready for YOU to place (local console Execute button / show_tickets).
+_GO_LIVE = os.environ.get("TRADING_GO_LIVE") == "1"
 TRADE_CONFIG = AgentConfig(
     account_number=os.environ.get("TRADING_ACCOUNT_NUMBER", "PAPER-ACCOUNT"),
-    mode=Mode.PAPER,
-    live_trading_armed=False,
+    mode=Mode.LIVE if _GO_LIVE else Mode.PAPER,
+    live_trading_armed=_GO_LIVE,
 )
 DOLLARS_PER_TRADE = 200.0
 
