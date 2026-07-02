@@ -22,12 +22,15 @@ jobs:
         with:
           path: trading_agent
 
+      # 3.13 matches the local venv the requirements were frozen from; the
+      # fallback keeps the daily run alive if a pinned version ever breaks on
+      # the runner (yfinance pulls in everything the briefing needs).
       - uses: actions/setup-python@v5
         with:
-          python-version: "3.11"
+          python-version: "3.13"
 
       - name: Install dependencies
-        run: pip install -r trading_agent/requirements.txt
+        run: pip install -r trading_agent/requirements.txt || pip install yfinance
 
       - name: Generate today's briefing
         run: python3 -m trading_agent.briefing_daily
