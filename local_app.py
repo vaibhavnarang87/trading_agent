@@ -1,50 +1,135 @@
 """
-Local ticket console — PRIVATE, localhost-only, with a gated Execute button.
+Ticket console — PRIVATE website with 2FA and a gated Execute button.
 
-Lists today's order tickets. Each risk-approved, live-armed ticket has:
-  - a "copy call" button (hands you the exact place_equity_order(...) call)
-  - an "EXECUTE" button that fires the order through YOUR executor
-    (live_executor.py — your credentials, your login, your click).
+Lists today's order tickets with reasons, governor verdicts, and (when armed)
+an EXECUTE button that fires YOUR executor (live_executor.py — your Robinhood
+login, your click). Nothing here routes an order through an AI or the public
+site, ever.
 
-The Execute path is deliberately hard to reach. ALL of these must be true:
-  1. You started this server yourself, on this machine (binds 127.0.0.1 only).
-  2. The plan's switch is LIVE-armed (Mode.LIVE + live_trading_armed in
-     briefing_daily.py — your deliberate edit).
-  3. The ticket passed the deterministic risk governor.
-  4. TRADING_EXECUTOR=robinhood is set AND you completed Robinhood login/MFA
-     in your terminal at startup. (Default executor is paper: simulated fills.)
-  5. You click EXECUTE and confirm the exact order in a dialog.
-  6. Per-request token matches (blocks CSRF from random web pages) and the
-     Host header is localhost (blocks DNS-rebinding).
-  7. The ticket's ref_id has not already been executed (no double-fires) and
-     the daily trade cap has not been reached.
+Access control
+--------------
+  TICKET_APP_PASSWORD      enable login: this password is required
+  TICKET_APP_TOTP_SECRET   also require a 6-digit authenticator code (2FA)
+  TICKET_APP_BIND          bind address (default 127.0.0.1). Anything other
+                           than localhost REQUIRES password+TOTP to be set, or
+                           the server refuses to start.
 
-Every execution (paper or real) is appended to data/private/executions.jsonl.
+Generate a 2FA secret (add it to Google Authenticator / 1Password / Authy):
+    python -m trading_agent.local_app --gen-totp
 
-    python -m trading_agent.local_app          # http://127.0.0.1:8787
+Typical private-website setup:
+    export TICKET_APP_PASSWORD='a long passphrase'
+    export TICKET_APP_TOTP_SECRET='BASE32SECRETFROMGENTOTP'
+    python -m trading_agent.local_app
+For phone access, prefer a private overlay network (e.g. Tailscale) over
+opening ports: keep the bind on 127.0.0.1 and reach it through the tailnet,
+or bind to your tailscale IP. Avoid 0.0.0.0 on a network you don't control.
+
+Execute gates (ALL must hold): authenticated session (when auth is on) ->
+localhost/known Host header -> CSRF token -> switch LIVE-armed -> ticket
+governor-approved -> your confirm click -> no double-fire -> daily trade cap.
+Every execution is appended to data/private/executions.jsonl.
 """
 from __future__ import annotations
 
+import base64
 import glob
+import hashlib
+import hmac
 import html
 import json
 import os
 import secrets
+import struct
+import sys
+import time
 from datetime import date, datetime, timezone
 from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import parse_qs
 
 from .config import RiskLimits
 from .poc.order import Order, OrderType, Side
 from .trade_plan import PRIVATE_DIR
 
-HOST = "127.0.0.1"     # localhost only — deliberately not 0.0.0.0
+BIND = os.environ.get("TICKET_APP_BIND", "127.0.0.1")
 PORT = int(os.environ.get("TICKET_APP_PORT", "8787"))
+PASSWORD = os.environ.get("TICKET_APP_PASSWORD")
+TOTP_SECRET = os.environ.get("TICKET_APP_TOTP_SECRET")
 EXECUTIONS = os.path.join(PRIVATE_DIR, "executions.jsonl")
 
-TOKEN = secrets.token_hex(16)          # per-server-run CSRF token
-EXECUTOR = None                        # set in main()
+TOKEN = secrets.token_hex(16)            # per-run CSRF token
+SESSIONS: dict[str, float] = {}          # session token -> expiry epoch
+SESSION_TTL = 12 * 3600
+FAILED: dict[str, list[float]] = {}      # client ip -> recent failure times
+MAX_FAILS, FAIL_WINDOW = 5, 300.0
+
+EXECUTOR = None
 EXEC_LABEL = "not initialized"
 LIMITS = RiskLimits()
+
+
+# ---------- TOTP (RFC 6238, stdlib only) ----------
+
+def totp_code(secret_b32: str, at: float | None = None) -> str:
+    pad = "=" * (-len(secret_b32) % 8)
+    key = base64.b32decode(secret_b32.upper() + pad)
+    counter = int((at if at is not None else time.time()) // 30)
+    digest = hmac.new(key, struct.pack(">Q", counter), hashlib.sha1).digest()
+    off = digest[-1] & 0x0F
+    num = struct.unpack(">I", digest[off:off + 4])[0] & 0x7FFFFFFF
+    return str(num % 1_000_000).zfill(6)
+
+
+def totp_verify(secret_b32: str, code: str, window: int = 1) -> bool:
+    now = time.time()
+    code = (code or "").strip()
+    return any(hmac.compare_digest(totp_code(secret_b32, now + i * 30), code)
+               for i in range(-window, window + 1))
+
+
+def gen_totp_secret() -> None:
+    secret = base64.b32encode(secrets.token_bytes(20)).decode().rstrip("=")
+    print("TOTP secret (put in your authenticator app, keep private):")
+    print(f"  {secret}")
+    print("otpauth URI (paste/scan into Google Authenticator, 1Password, Authy):")
+    print(f"  otpauth://totp/ticket-console?secret={secret}&issuer=trading_agent")
+    print("Then: export TICKET_APP_TOTP_SECRET=" + secret)
+
+
+# ---------- auth ----------
+
+def auth_enabled() -> bool:
+    return bool(PASSWORD)
+
+
+def session_ok(headers) -> bool:
+    if not auth_enabled():
+        return True
+    cookie = headers.get("Cookie") or ""
+    for part in cookie.split(";"):
+        k, _, v = part.strip().partition("=")
+        if k == "session" and SESSIONS.get(v, 0) > time.time():
+            return True
+    return False
+
+
+def locked_out(ip: str) -> bool:
+    now = time.time()
+    FAILED[ip] = [t for t in FAILED.get(ip, []) if now - t < FAIL_WINDOW]
+    return len(FAILED[ip]) >= MAX_FAILS
+
+
+def try_login(ip: str, password: str, code: str) -> str | None:
+    """Returns a new session token on success, else None."""
+    ok = bool(PASSWORD) and hmac.compare_digest(password or "", PASSWORD)
+    if ok and TOTP_SECRET:
+        ok = totp_verify(TOTP_SECRET, code)
+    if not ok:
+        FAILED.setdefault(ip, []).append(time.time())
+        return None
+    tok = secrets.token_hex(24)
+    SESSIONS[tok] = time.time() + SESSION_TTL
+    return tok
 
 
 # ---------- plan / ledger helpers ----------
@@ -96,14 +181,14 @@ def _order_from_params(p: dict) -> Order:
     )
 
 
-# ---------- the execute gate (every check, in order, with a reason) ----------
+# ---------- the execute gate ----------
 
 def try_execute(ref_id: str) -> tuple[bool, str, dict | None]:
     plan = _latest_plan()
     if plan is None:
         return False, "no trade plan on disk", None
     if not plan.get("armed"):
-        return False, "switch is PAPER — arm it in briefing_daily.py first", None
+        return False, "switch is PAPER — arm with TRADING_GO_LIVE=1 first", None
 
     ticket = next((t for t in plan.get("tickets", [])
                    if t.get("broker_params", {}).get("ref_id") == ref_id), None)
@@ -115,8 +200,7 @@ def try_execute(ref_id: str) -> tuple[bool, str, dict | None]:
     if ref_id in _executed_ref_ids():
         return False, "already executed (double-fire blocked)", None
     if _executions_today() >= LIMITS.max_trades_per_day:
-        return False, (f"daily trade cap reached "
-                       f"({LIMITS.max_trades_per_day}/day)"), None
+        return False, f"daily trade cap reached ({LIMITS.max_trades_per_day}/day)", None
 
     order = _order_from_params(ticket["broker_params"])
     errs = order.validate()
@@ -128,7 +212,34 @@ def try_execute(ref_id: str) -> tuple[bool, str, dict | None]:
     return True, "submitted", result
 
 
-# ---------- rendering ----------
+# ---------- pages ----------
+
+def _login_page(msg: str = "") -> str:
+    totp_field = ("<label>2FA code<br><input name='code' inputmode='numeric' "
+                  "autocomplete='one-time-code' placeholder='123456'></label><br>"
+                  if TOTP_SECRET else "")
+    note = f"<p class='err'>{html.escape(msg)}</p>" if msg else ""
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ticket console — sign in</title><style>
+ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,sans-serif;
+   max-width:360px;margin:12vh auto;padding:0 16px;color:#1a1a1a}}
+ h1{{font-size:1.15rem}} label{{font-size:.9rem;color:#444}}
+ input{{width:100%;padding:9px 10px;margin:6px 0 14px;border:1px solid #ccc;
+   border-radius:6px;font-size:1rem}}
+ button{{width:100%;padding:10px;border:none;border-radius:6px;background:#1a1a1a;
+   color:#fff;font-size:.95rem;cursor:pointer}}
+ .err{{color:#a01919;font-size:.85rem}}
+</style></head><body>
+<h1>Ticket console</h1>
+{note}
+<form method="POST" action="/login">
+<label>Password<br><input type="password" name="password" autofocus></label><br>
+{totp_field}
+<button type="submit">Sign in</button>
+</form>
+</body></html>"""
+
 
 def _render(plan: dict | None) -> str:
     if plan is None:
@@ -176,16 +287,17 @@ def _render(plan: dict | None) -> str:
           <div class="result" id="rs-{html.escape(ref)}"></div>
         </div>""")
 
-    exec_cls = "x-real" if real else "x-paper"
+    auth_note = ("password + 2FA" if TOTP_SECRET else "password") if auth_enabled() else "no auth (localhost)"
     body = f"""
       <div class="switch {'armed' if armed else 'paper'}">Switch: {switch}
         <span class="sub">plan {html.escape(str(plan.get('date')))} ·
-        executions today: {_executions_today()}/{LIMITS.max_trades_per_day}</span>
+        executions today: {_executions_today()}/{LIMITS.max_trades_per_day} ·
+        access: {auth_note}</span>
       </div>
-      <div class="execline {exec_cls}">Executor: {html.escape(EXEC_LABEL)}</div>
+      <div class="execline {'x-real' if real else 'x-paper'}">Executor: {html.escape(EXEC_LABEL)}</div>
       {''.join(rows) or "<p class='empty'>No tickets in today's plan.</p>"}
-      <p class="foot">localhost only · every execute is confirmed by you and logged
-      to executions.jsonl · the trigger is yours</p>
+      <p class="foot">private console · every execute is confirmed by you and logged ·
+      the trigger is yours</p>
     """
     return _page(body, switch)
 
@@ -264,7 +376,9 @@ document.querySelectorAll('button.exec').forEach(function(b){{
 
 def _host_ok(headers) -> bool:
     h = (headers.get("Host") or "").split(":")[0]
-    return h in ("127.0.0.1", "localhost")
+    if BIND in ("127.0.0.1", "localhost"):
+        return h in ("127.0.0.1", "localhost")
+    return h in ("127.0.0.1", "localhost", BIND)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -276,30 +390,58 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(raw)
 
+    def _html(self, code: int, page: str, cookie: str | None = None) -> None:
+        raw = page.encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "text/html; charset=utf-8")
+        self.send_header("Content-Length", str(len(raw)))
+        if cookie:
+            self.send_header("Set-Cookie",
+                             f"session={cookie}; HttpOnly; SameSite=Strict; Path=/")
+        self.end_headers()
+        self.wfile.write(raw)
+
     def do_GET(self):
         if not _host_ok(self.headers):
             self.send_error(403, "Bad Host header.")
             return
-        if self.path not in ("/", "/index.html"):
+        if self.path not in ("/", "/index.html", "/login"):
             self.send_error(404, "Only / is served.")
             return
-        page = _render(_latest_plan()).encode("utf-8")
-        self.send_response(200)
-        self.send_header("Content-Type", "text/html; charset=utf-8")
-        self.send_header("Content-Length", str(len(page)))
-        self.end_headers()
-        self.wfile.write(page)
+        if auth_enabled() and not session_ok(self.headers):
+            self._html(200, _login_page())
+            return
+        self._html(200, _render(_latest_plan()))
 
     def do_POST(self):
-        if self.path != "/execute":
-            self._json(404, {"ok": False, "detail": "unknown endpoint"})
-            return
         if not _host_ok(self.headers):
             self._json(403, {"ok": False, "detail": "bad Host header"})
             return
+        n = int(self.headers.get("Content-Length", 0) or 0)
+        raw = self.rfile.read(n) if n else b""
+
+        if self.path == "/login":
+            ip = self.client_address[0]
+            if locked_out(ip):
+                self._html(429, _login_page("Too many attempts. Wait 5 minutes."))
+                return
+            form = parse_qs(raw.decode("utf-8", "replace"))
+            tok = try_login(ip, (form.get("password") or [""])[0],
+                            (form.get("code") or [""])[0])
+            if tok is None:
+                self._html(403, _login_page("Wrong password or code."))
+                return
+            self._html(200, _render(_latest_plan()), cookie=tok)
+            return
+
+        if self.path != "/execute":
+            self._json(404, {"ok": False, "detail": "unknown endpoint"})
+            return
+        if auth_enabled() and not session_ok(self.headers):
+            self._json(401, {"ok": False, "detail": "not signed in"})
+            return
         try:
-            n = int(self.headers.get("Content-Length", 0))
-            body = json.loads(self.rfile.read(n) or b"{}")
+            body = json.loads(raw or b"{}")
         except Exception:
             self._json(400, {"ok": False, "detail": "bad request body"})
             return
@@ -320,17 +462,32 @@ class Handler(BaseHTTPRequestHandler):
 
 def main() -> None:
     global EXECUTOR, EXEC_LABEL
+    if "--gen-totp" in sys.argv:
+        gen_totp_secret()
+        return
+
+    if BIND not in ("127.0.0.1", "localhost") and not (PASSWORD and TOTP_SECRET):
+        raise SystemExit(
+            f"Refusing to bind {BIND} without full auth. A non-localhost bind "
+            f"exposes the console beyond this machine, so BOTH "
+            f"TICKET_APP_PASSWORD and TICKET_APP_TOTP_SECRET are required. "
+            f"(Prefer keeping 127.0.0.1 and reaching it over Tailscale.)"
+        )
+
     from .live_executor import get_executor
     EXECUTOR, EXEC_LABEL = get_executor()   # robinhood login/MFA happens here, in YOUR terminal
 
-    server = HTTPServer((HOST, PORT), Handler)
-    print(f"Ticket console at http://{HOST}:{PORT}")
+    server = HTTPServer((BIND, PORT), Handler)
+    print(f"Ticket console at http://{BIND}:{PORT}")
+    print(f"Access: " + ("password + 2FA" if (PASSWORD and TOTP_SECRET)
+                         else "password only" if PASSWORD
+                         else "no auth (localhost only)"))
     print(f"Executor: {EXEC_LABEL}")
     if "REAL MONEY" in EXEC_LABEL:
         print("!!! REAL-MONEY EXECUTOR ACTIVE — every Execute click places a real order.")
     else:
         print("Paper executor: Execute clicks record simulated fills only.")
-    print("Localhost only. Ctrl-C to stop.")
+    print("Ctrl-C to stop.")
     try:
         server.serve_forever()
     except KeyboardInterrupt:
