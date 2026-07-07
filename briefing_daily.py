@@ -20,6 +20,7 @@ from datetime import date
 
 from .config import AgentConfig, Mode
 from .daily_briefing import build_card, render_briefing
+from .env_file import load_env_file
 from .run_daily import fetch_sentiment_rows, fetch_spy_today, _already_recorded
 from .forward_paper import record_day
 from .screener import run_screen, render_screen_section
@@ -38,6 +39,7 @@ BRIEF_DIR = os.path.join(HERE, "data", "briefings")
 #     export TRADING_ACCOUNT_NUMBER=...   # your account, never committed
 # Even armed, this pipeline never places orders — arming makes tickets
 # live-ready for YOU to place (local console Execute button / show_tickets).
+load_env_file()   # ~/.trading_agent.env fills in unset vars (shell exports win)
 _GO_LIVE = os.environ.get("TRADING_GO_LIVE") == "1"
 TRADE_CONFIG = AgentConfig(
     account_number=os.environ.get("TRADING_ACCOUNT_NUMBER", "PAPER-ACCOUNT"),

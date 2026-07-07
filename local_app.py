@@ -48,8 +48,11 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs
 
 from .config import RiskLimits
+from .env_file import env_path, init_env_file, load_env_file
 from .poc.order import Order, OrderType, Side
 from .trade_plan import PRIVATE_DIR
+
+_ENV_LOADED = load_env_file()   # ~/.trading_agent.env fills in unset vars
 
 BIND = os.environ.get("TICKET_APP_BIND", "127.0.0.1")
 PORT = int(os.environ.get("TICKET_APP_PORT", "8787"))
@@ -464,6 +467,18 @@ def main() -> None:
     global EXECUTOR, EXEC_LABEL
     if "--gen-totp" in sys.argv:
         gen_totp_secret()
+        return
+    if "--init-env" in sys.argv:
+        secret = base64.b32encode(secrets.token_bytes(20)).decode().rstrip("=")
+        path = init_env_file(secret, account_number="899433726")
+        print(f"Created {path} (owner-only).")
+        print("Add the 2FA secret to your authenticator app (scan/paste):")
+        print(f"  otpauth://totp/ticket-console?secret={secret}&issuer=trading_agent")
+        print("Now edit the file and fill in:")
+        print("  TICKET_APP_PASSWORD=   (words of your own)")
+        print("  RH_USERNAME= / RH_PASSWORD=   (only when you go live)")
+        print("  TRADING_GO_LIVE=1 and TRADING_EXECUTOR=robinhood  (only when you go live)")
+        print(f"Edit with: open -t {path}")
         return
 
     if BIND not in ("127.0.0.1", "localhost") and not (PASSWORD and TOTP_SECRET):
