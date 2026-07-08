@@ -54,28 +54,57 @@ class RobinhoodExecutor(OrderExecutor):
         # prompt is you, personally, authorizing this session.
         self.rh.login(user, pwd)
 
+    def _verify_account(self, account_number: str) -> None:
+        """Confirm the target account exists and is reachable by this login.
+        Refuse to place if we can't resolve it — better than silently landing
+        on the Robinhood default account (the wrong-account bug)."""
+        if not account_number or account_number == "PAPER-ACCOUNT":
+            raise RuntimeError(
+                "No real account_number configured — refusing to place. Set "
+                "TRADING_ACCOUNT_NUMBER to your Agentic account."
+            )
+        try:
+            url = self.rh.account.load_account_profile(
+                account_number=account_number, info="url")
+        except Exception as e:
+            raise RuntimeError(f"Could not resolve account {account_number}: {e}") from e
+        if not url:
+            raise RuntimeError(
+                f"Account {account_number} is not accessible by this login. "
+                f"Refusing to place (would otherwise hit the default account)."
+            )
+
     def place(self, order: Order) -> dict:
+        # Route to the SPECIFIC configured account. Without this, robin_stocks
+        # places on the Robinhood default account — which is NOT the Agentic
+        # account and caused a real order to land in the wrong account.
+        acct = order.account_number
+        self._verify_account(acct)
         o = self.rh.orders
         tif = order.time_in_force
         if order.type == OrderType.MARKET and order.dollar_amount is not None:
-            if order.side.value == "buy":
-                resp = o.order_buy_fractional_by_price(
-                    order.symbol, order.dollar_amount, timeInForce=tif)
-            else:
-                resp = o.order_sell_fractional_by_price(
-                    order.symbol, order.dollar_amount, timeInForce=tif)
+            fn = (o.order_buy_fractional_by_price if order.side.value == "buy"
+                  else o.order_sell_fractional_by_price)
+            resp = fn(order.symbol, order.dollar_amount, account_number=acct,
+                      timeInForce=tif)
         elif order.type == OrderType.LIMIT and order.quantity is not None:
-            if order.side.value == "buy":
-                resp = o.order_buy_limit(
-                    order.symbol, order.quantity, order.limit_price, timeInForce=tif)
-            else:
-                resp = o.order_sell_limit(
-                    order.symbol, order.quantity, order.limit_price, timeInForce=tif)
+            fn = (o.order_buy_limit if order.side.value == "buy"
+                  else o.order_sell_limit)
+            resp = fn(order.symbol, order.quantity, order.limit_price,
+                      account_number=acct, timeInForce=tif)
         else:
             raise ValueError(f"Unsupported order shape: {order.describe()}")
+
+        # Verify the broker actually accepted it. robin_stocks returns a dict
+        # with an 'id' on success, or an error payload (no 'id') on failure —
+        # do NOT report success blindly (that produced a false confirmation).
+        if not isinstance(resp, dict) or not resp.get("id"):
+            raise RuntimeError(
+                f"Order was NOT accepted by Robinhood. Response: {resp}")
         return {"status": "submitted", "real_money": True,
-                "order": order.describe(), "ref_id": order.ref_id,
-                "broker_response": resp}
+                "order": order.describe(), "account": acct,
+                "ref_id": order.ref_id, "broker_order_id": resp.get("id"),
+                "broker_state": resp.get("state"), "broker_response": resp}
 
 
 def get_executor() -> tuple[OrderExecutor, str]:
