@@ -644,8 +644,15 @@ def main() -> None:
             f"(Prefer keeping 127.0.0.1 and reaching it over Tailscale.)"
         )
 
-    from .live_executor import get_executor
-    EXECUTOR, EXEC_LABEL = get_executor()   # robinhood login/MFA happens here, in YOUR terminal
+    from .live_executor import PaperExecutor, get_executor
+    try:
+        EXECUTOR, EXEC_LABEL = get_executor()   # robinhood login/MFA happens here, in YOUR terminal
+    except Exception as e:
+        # Don't crash on a bad/incomplete live config — degrade to paper so the
+        # console (and its settings page) stays reachable to fix it.
+        EXECUTOR, EXEC_LABEL = PaperExecutor(), "paper (live setup incomplete)"
+        print(f"NOTE: falling back to paper — {type(e).__name__}: {e}")
+        print("      Fix it at http://%s:%d/settings, then restart." % (BIND, PORT))
 
     server = HTTPServer((BIND, PORT), Handler)
     print(f"Ticket console at http://{BIND}:{PORT}")
