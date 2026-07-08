@@ -652,9 +652,17 @@ def main() -> None:
         )
 
     from .live_executor import PaperExecutor, get_executor
-    try:
+    if os.environ.get("TRADING_EXECUTOR", "paper").lower() == "robinhood" and not PASSWORD:
+        # No console password => the execute endpoint would be unauthenticated.
+        # Never run a real-money executor open like that. Force paper until a
+        # sign-in password is set (via the setup screen).
+        EXECUTOR, EXEC_LABEL = PaperExecutor(), "paper (set a console password to enable live)"
+        print("SAFETY: real-money executor disabled — no console password set.")
+        print(f"        Set one at http://{BIND}:{PORT}/settings, then restart.")
+    else:
+      try:
         EXECUTOR, EXEC_LABEL = get_executor()   # robinhood login/MFA happens here, in YOUR terminal
-    except Exception as e:
+      except Exception as e:
         # Don't crash on a bad/incomplete live config — degrade to paper so the
         # console (and its settings page) stays reachable to fix it.
         EXECUTOR, EXEC_LABEL = PaperExecutor(), "paper (live setup incomplete)"
