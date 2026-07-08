@@ -48,7 +48,7 @@ from http.server import BaseHTTPRequestHandler, HTTPServer
 from urllib.parse import parse_qs
 
 from .config import RiskLimits
-from .env_file import env_path, init_env_file, load_env_file
+from .env_file import env_path, init_env_file, load_env_file, update_env_values
 from .poc.order import Order, OrderType, Side
 from .trade_plan import PRIVATE_DIR
 
@@ -463,8 +463,56 @@ class Handler(BaseHTTPRequestHandler):
         pass
 
 
+def run_setup() -> None:
+    """Guided setup: prompts fill ~/.trading_agent.env directly. Password
+    typing is HIDDEN (getpass) — nothing sensitive echoes to the screen."""
+    import getpass
+
+    path = env_path()
+    if not os.path.exists(path):
+        secret = base64.b32encode(secrets.token_bytes(20)).decode().rstrip("=")
+        init_env_file(secret, account_number="899433726")
+        print(f"Created {path}")
+        print("ADD THIS 2FA SECRET to Google Authenticator now (scan/paste):")
+        print(f"  otpauth://totp/ticket-console?secret={secret}&issuer=trading_agent\n")
+
+    print("Console sign-in password — invent your own words; typing is hidden.")
+    while True:
+        pw1 = getpass.getpass("  console password: ").strip()
+        if len(pw1) < 8:
+            print("  too short (8+ characters) — try again")
+            continue
+        if pw1 == getpass.getpass("  repeat it: ").strip():
+            break
+        print("  didn't match — try again")
+
+    current_user = os.environ.get("RH_USERNAME", "")
+    user = input(f"Robinhood email [{current_user or 'required'}]: ").strip() or current_user
+    rh_pw = getpass.getpass("Robinhood password (typing hidden): ").strip()
+
+    arm = input("Arm LIVE trading? Execute clicks will place REAL orders. [y/N]: ").strip().lower()
+    go_live = "1" if arm == "y" else "0"
+    executor = "robinhood" if arm == "y" else "paper"
+
+    update_env_values({
+        "TICKET_APP_PASSWORD": pw1,
+        "RH_USERNAME": user,
+        "RH_PASSWORD": rh_pw,
+        "TRADING_GO_LIVE": go_live,
+        "TRADING_EXECUTOR": executor,
+    })
+    print(f"\nSaved to {path} (owner-only).")
+    print("Mode: " + ("LIVE-ARMED — real money on Execute clicks"
+                      if arm == "y" else "paper (safe)"))
+    print("Next:  python -m trading_agent.briefing_daily")
+    print("Then:  python -m trading_agent.local_app")
+
+
 def main() -> None:
     global EXECUTOR, EXEC_LABEL
+    if "--setup" in sys.argv:
+        run_setup()
+        return
     if "--gen-totp" in sys.argv:
         gen_totp_secret()
         return

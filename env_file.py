@@ -69,6 +69,30 @@ RH_PASSWORD=
 """
 
 
+def update_env_values(updates: dict[str, str], path: str | None = None) -> None:
+    """Set KEY=VALUE lines in the env file in place, preserving comments and
+    order. Keys not present are appended. File keeps owner-only perms."""
+    path = path or env_path()
+    lines = open(path).read().splitlines() if os.path.exists(path) else []
+    remaining = dict(updates)
+    out = []
+    for line in lines:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#") and "=" in stripped:
+            key = stripped.partition("=")[0].strip()
+            if key in remaining:
+                out.append(f"{key}={remaining.pop(key)}")
+                continue
+        out.append(line)
+    for key, value in remaining.items():
+        out.append(f"{key}={value}")
+    fd = os.open(path + ".tmp", os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    with os.fdopen(fd, "w") as f:
+        f.write("\n".join(out) + "\n")
+    os.replace(path + ".tmp", path)
+    os.chmod(path, 0o600)
+
+
 def init_env_file(totp_secret: str, account_number: str = "") -> str:
     """Create the env file with safe defaults + a fresh TOTP secret.
     Refuses to overwrite an existing file."""
