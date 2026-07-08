@@ -481,7 +481,14 @@ class Handler(BaseHTTPRequestHandler):
         if self.path not in ("/", "/index.html", "/login", "/settings"):
             self.send_error(404, "Only / is served.")
             return
-        if auth_enabled() and not session_ok(self.headers):
+        # Always open with a gate: setup screen if nothing is configured yet,
+        # sign-in if a password exists. Tickets never show before the gate.
+        if not auth_enabled():
+            self._html(200, _settings_page(
+                "Welcome — set a console sign-in password to get started, then "
+                "restart the console. Until then the console is locked."))
+            return
+        if not session_ok(self.headers):
             self._html(200, _login_page())
             return
         if self.path == "/settings":
