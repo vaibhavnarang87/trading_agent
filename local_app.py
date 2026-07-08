@@ -217,6 +217,75 @@ def try_execute(ref_id: str) -> tuple[bool, str, dict | None]:
 
 # ---------- pages ----------
 
+def _settings_page(msg: str = "", generated: str = "") -> str:
+    plan = _latest_plan()
+    armed_now = bool(plan and plan.get("armed"))
+    totp_state = "configured" if TOTP_SECRET else "NOT set"
+    acct = os.environ.get("TRADING_ACCOUNT_NUMBER", "")
+    user = os.environ.get("RH_USERNAME", "")
+    execu = os.environ.get("TRADING_EXECUTOR", "paper")
+    note = f"<p class='ok'>{html.escape(msg)}</p>" if msg else ""
+    gen = ""
+    if generated:
+        gen = (f"<div class='gen'><b>New 2FA secret — add to your authenticator now:</b>"
+               f"<br><code>otpauth://totp/ticket-console?secret={generated}"
+               f"&issuer=trading_agent</code></div>")
+    rb_sel = " selected" if execu == "robinhood" else ""
+    pp_sel = " selected" if execu != "robinhood" else ""
+    return f"""<!doctype html><html lang="en"><head><meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Ticket console — settings</title><style>
+ body{{font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Helvetica,sans-serif;
+   max-width:520px;margin:6vh auto;padding:0 16px;color:#1a1a1a}}
+ h1{{font-size:1.2rem}} h2{{font-size:.95rem;margin:22px 0 6px;color:#333}}
+ label{{font-size:.85rem;color:#444;display:block;margin-top:10px}}
+ input,select{{width:100%;padding:9px 10px;margin-top:4px;border:1px solid #ccc;
+   border-radius:6px;font-size:1rem;box-sizing:border-box}}
+ .hint{{font-size:.75rem;color:#888;margin-top:2px}}
+ .row{{display:flex;align-items:center;gap:8px;margin-top:14px}}
+ .row input{{width:auto;margin:0}}
+ button{{margin-top:20px;width:100%;padding:11px;border:none;border-radius:6px;
+   background:#1a1a1a;color:#fff;font-size:.95rem;cursor:pointer}}
+ .ok{{color:#1b5e20;font-size:.85rem}} .gen{{background:#fff8e1;border:1px solid #e0c46c;
+   border-radius:6px;padding:10px;font-size:.78rem;margin:10px 0;word-break:break-all}}
+ .warn{{background:#fdecea;border:1px solid #e0a0a0;border-radius:6px;padding:10px;
+   font-size:.78rem;color:#7d1010;margin:10px 0}}
+ a{{font-size:.85rem}} code{{font-family:ui-monospace,Menlo,monospace}}
+</style></head><body>
+<h1>Console settings</h1>
+{note}{gen}
+<p class="hint">Saved to your private config file. Leave a password field blank to
+keep the current one. <b>Restart the console after saving</b> for execution and
+arming changes to take effect (the Robinhood login/MFA happens at startup).</p>
+<div class="warn">Arming LIVE + Robinhood executor means each Execute click places
+a REAL order. Currently armed: <b>{'YES' if armed_now else 'no'}</b>.</div>
+<form method="POST" action="/settings">
+<input type="hidden" name="token" value="{TOKEN}">
+<h2>Console access</h2>
+<label>Console sign-in password
+<input type="password" name="console_password" autocomplete="new-password"
+ placeholder="leave blank to keep current"></label>
+<div class="row"><input type="checkbox" name="regen_totp" id="rt">
+<label for="rt" style="margin:0">Generate a new 2FA secret (current: {totp_state})</label></div>
+<h2>Account &amp; execution</h2>
+<label>Robinhood account number
+<input name="account_number" value="{html.escape(acct)}"></label>
+<label>Robinhood email
+<input name="rh_username" value="{html.escape(user)}" autocomplete="username"></label>
+<label>Robinhood password
+<input type="password" name="rh_password" autocomplete="new-password"
+ placeholder="leave blank to keep current"></label>
+<label>Executor
+<select name="executor"><option value="paper"{pp_sel}>paper (simulated fills)</option>
+<option value="robinhood"{rb_sel}>robinhood (REAL MONEY)</option></select></label>
+<div class="row"><input type="checkbox" name="go_live" id="gl">
+<label for="gl" style="margin:0">Arm LIVE trading (TRADING_GO_LIVE=1)</label></div>
+<button type="submit">Save settings</button>
+</form>
+<p style="margin-top:18px"><a href="/">&larr; back to tickets</a></p>
+</body></html>"""
+
+
 def _login_page(msg: str = "") -> str:
     totp_field = ("<label>2FA code<br><input name='code' inputmode='numeric' "
                   "autocomplete='one-time-code' placeholder='123456'></label><br>"
@@ -297,7 +366,8 @@ def _render(plan: dict | None) -> str:
         executions today: {_executions_today()}/{LIMITS.max_trades_per_day} ·
         access: {auth_note}</span>
       </div>
-      <div class="execline {'x-real' if real else 'x-paper'}">Executor: {html.escape(EXEC_LABEL)}</div>
+      <div class="execline {'x-real' if real else 'x-paper'}">Executor: {html.escape(EXEC_LABEL)}
+        <a href="/settings" style="float:right;color:inherit">settings</a></div>
       {''.join(rows) or "<p class='empty'>No tickets in today's plan.</p>"}
       <p class="foot">private console · every execute is confirmed by you and logged ·
       the trigger is yours</p>
@@ -408,11 +478,14 @@ class Handler(BaseHTTPRequestHandler):
         if not _host_ok(self.headers):
             self.send_error(403, "Bad Host header.")
             return
-        if self.path not in ("/", "/index.html", "/login"):
+        if self.path not in ("/", "/index.html", "/login", "/settings"):
             self.send_error(404, "Only / is served.")
             return
         if auth_enabled() and not session_ok(self.headers):
             self._html(200, _login_page())
+            return
+        if self.path == "/settings":
+            self._html(200, _settings_page())
             return
         self._html(200, _render(_latest_plan()))
 
@@ -435,6 +508,40 @@ class Handler(BaseHTTPRequestHandler):
                 self._html(403, _login_page("Wrong password or code."))
                 return
             self._html(200, _render(_latest_plan()), cookie=tok)
+            return
+
+        if self.path == "/settings":
+            if auth_enabled() and not session_ok(self.headers):
+                self._html(401, _login_page("Sign in first."))
+                return
+            form = parse_qs(raw.decode("utf-8", "replace"))
+            if (form.get("token") or [""])[0] != TOKEN:
+                self._html(403, _settings_page("Bad token — reload the page."))
+                return
+            updates: dict[str, str] = {
+                "TRADING_GO_LIVE": "1" if form.get("go_live") else "0",
+                "TRADING_EXECUTOR": (form.get("executor") or ["paper"])[0],
+            }
+            for field, key in (("account_number", "TRADING_ACCOUNT_NUMBER"),
+                               ("rh_username", "RH_USERNAME"),
+                               ("console_password", "TICKET_APP_PASSWORD"),
+                               ("rh_password", "RH_PASSWORD")):
+                val = (form.get(field) or [""])[0].strip()
+                if val:
+                    updates[key] = val
+            generated = ""
+            if form.get("regen_totp"):
+                import base64 as _b64
+                generated = _b64.b32encode(secrets.token_bytes(20)).decode().rstrip("=")
+                updates["TICKET_APP_TOTP_SECRET"] = generated
+            try:
+                update_env_values(updates)
+            except Exception as e:
+                self._html(500, _settings_page(f"Save failed: {e}"))
+                return
+            self._html(200, _settings_page(
+                "Saved. Restart the console (Ctrl-C, then re-run) for execution "
+                "and arming changes to take effect.", generated))
             return
 
         if self.path != "/execute":
