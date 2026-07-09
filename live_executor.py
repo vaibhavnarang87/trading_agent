@@ -41,13 +41,14 @@ class RobinhoodExecutor(OrderExecutor):
             raise RuntimeError(
                 "robin_stocks is not installed. Run: pip install robin_stocks"
             ) from e
+        from .secrets_store import get_rh_password
         user = os.environ.get("RH_USERNAME")
-        pwd = os.environ.get("RH_PASSWORD")
+        pwd = get_rh_password()   # macOS Keychain first, env fallback
         if not user or not pwd:
             raise RuntimeError(
-                "Set RH_USERNAME and RH_PASSWORD env vars in your shell. "
-                "They stay on your machine; this code never stores or sends "
-                "them anywhere except Robinhood's own login."
+                "No Robinhood credentials found. Set them once via the console "
+                "settings page or `python -m trading_agent.local_app --setup`. "
+                "The password is stored in your macOS Keychain, not in plaintext."
             )
         self.rh = rh
         # Interactive: robin_stocks prompts for MFA in the terminal — that

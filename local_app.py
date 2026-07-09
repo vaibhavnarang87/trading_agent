@@ -50,13 +50,16 @@ from urllib.parse import parse_qs
 from .config import RiskLimits
 from .env_file import env_path, init_env_file, load_env_file, update_env_values
 from .poc.order import Order, OrderType, Side
+from .secrets_store import (console_password_hash, migrate_plaintext_secrets,
+                            set_console_password, verify_password)
 from .trade_plan import PRIVATE_DIR
 
-_ENV_LOADED = load_env_file()   # ~/.trading_agent.env fills in unset vars
+_ENV_LOADED = load_env_file()          # ~/.trading_agent.env fills in unset vars
+migrate_plaintext_secrets()            # move any plaintext secrets to hash/keychain
 
 BIND = os.environ.get("TICKET_APP_BIND", "127.0.0.1")
 PORT = int(os.environ.get("TICKET_APP_PORT", "8787"))
-PASSWORD = os.environ.get("TICKET_APP_PASSWORD")
+PW_HASH = console_password_hash()      # salted hash, never the plaintext
 TOTP_SECRET = os.environ.get("TICKET_APP_TOTP_SECRET")
 EXECUTIONS = os.path.join(PRIVATE_DIR, "executions.jsonl")
 
@@ -102,7 +105,7 @@ def gen_totp_secret() -> None:
 # ---------- auth ----------
 
 def auth_enabled() -> bool:
-    return bool(PASSWORD)
+    return bool(PW_HASH)
 
 
 def session_ok(headers) -> bool:
@@ -124,7 +127,7 @@ def locked_out(ip: str) -> bool:
 
 def try_login(ip: str, password: str, code: str) -> str | None:
     """Returns a new session token on success, else None."""
-    ok = bool(PASSWORD) and hmac.compare_digest(password or "", PASSWORD)
+    ok = bool(PW_HASH) and verify_password(password or "", PW_HASH)
     if ok and TOTP_SECRET:
         ok = totp_verify(TOTP_SECRET, code)
     if not ok:
@@ -530,12 +533,19 @@ class Handler(BaseHTTPRequestHandler):
                 "TRADING_EXECUTOR": (form.get("executor") or ["paper"])[0],
             }
             for field, key in (("account_number", "TRADING_ACCOUNT_NUMBER"),
-                               ("rh_username", "RH_USERNAME"),
-                               ("console_password", "TICKET_APP_PASSWORD"),
-                               ("rh_password", "RH_PASSWORD")):
+                               ("rh_username", "RH_USERNAME")):
                 val = (form.get(field) or [""])[0].strip()
                 if val:
                     updates[key] = val
+            # Secrets go to hash / Keychain, never plaintext env.
+            console_pw = (form.get("console_password") or [""])[0].strip()
+            if console_pw:
+                set_console_password(console_pw)          # salted hash
+            rh_pw = (form.get("rh_password") or [""])[0].strip()
+            if rh_pw:
+                from .secrets_store import set_rh_password
+                if not set_rh_password(rh_pw):            # Keychain
+                    updates["RH_PASSWORD"] = rh_pw        # fallback if Keychain unavailable
             generated = ""
             if form.get("regen_totp"):
                 import base64 as _b64
@@ -608,13 +618,14 @@ def run_setup() -> None:
     go_live = "1" if arm == "y" else "0"
     executor = "robinhood" if arm == "y" else "paper"
 
-    update_env_values({
-        "TICKET_APP_PASSWORD": pw1,
-        "RH_USERNAME": user,
-        "RH_PASSWORD": rh_pw,
-        "TRADING_GO_LIVE": go_live,
-        "TRADING_EXECUTOR": executor,
-    })
+    set_console_password(pw1)                    # salted hash, not plaintext
+    env_updates = {"RH_USERNAME": user, "TRADING_GO_LIVE": go_live,
+                   "TRADING_EXECUTOR": executor}
+    if rh_pw:
+        from .secrets_store import set_rh_password
+        if not set_rh_password(rh_pw):           # Keychain; fallback to env
+            env_updates["RH_PASSWORD"] = rh_pw
+    update_env_values(env_updates)
     print(f"\nSaved to {path} (owner-only).")
     print("Mode: " + ("LIVE-ARMED — real money on Execute clicks"
                       if arm == "y" else "paper (safe)"))
@@ -643,7 +654,7 @@ def main() -> None:
         print(f"Edit with: open -t {path}")
         return
 
-    if BIND not in ("127.0.0.1", "localhost") and not (PASSWORD and TOTP_SECRET):
+    if BIND not in ("127.0.0.1", "localhost") and not (PW_HASH and TOTP_SECRET):
         raise SystemExit(
             f"Refusing to bind {BIND} without full auth. A non-localhost bind "
             f"exposes the console beyond this machine, so BOTH "
@@ -652,7 +663,7 @@ def main() -> None:
         )
 
     from .live_executor import PaperExecutor, get_executor
-    if os.environ.get("TRADING_EXECUTOR", "paper").lower() == "robinhood" and not PASSWORD:
+    if os.environ.get("TRADING_EXECUTOR", "paper").lower() == "robinhood" and not PW_HASH:
         # No console password => the execute endpoint would be unauthenticated.
         # Never run a real-money executor open like that. Force paper until a
         # sign-in password is set (via the setup screen).
@@ -671,8 +682,8 @@ def main() -> None:
 
     server = HTTPServer((BIND, PORT), Handler)
     print(f"Ticket console at http://{BIND}:{PORT}")
-    print(f"Access: " + ("password + 2FA" if (PASSWORD and TOTP_SECRET)
-                         else "password only" if PASSWORD
+    print(f"Access: " + ("password + 2FA" if (PW_HASH and TOTP_SECRET)
+                         else "password only" if PW_HASH
                          else "no auth (localhost only)"))
     print(f"Executor: {EXEC_LABEL}")
     if "REAL MONEY" in EXEC_LABEL:
