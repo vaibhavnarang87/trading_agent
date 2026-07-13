@@ -6,3 +6,4 @@ __pycache__/
 # PRIVATE — executable trade tickets, live-armed plans, any account context.
 # Never publish these to the public repo/site.
 data/private/
+.mcp.json
