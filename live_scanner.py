@@ -72,12 +72,27 @@ def _signaled_today() -> set[str]:
 
 
 def _notify(title: str, text: str) -> None:
+    # Mac notification
     try:
         subprocess.run(["osascript", "-e",
                         f'display notification "{text}" with title "{title}"'],
                        capture_output=True, timeout=10)
     except Exception:
         pass
+    # Phone push via ntfy.sh (free). Set NTFY_TOPIC in ~/.trading_agent.env and
+    # subscribe to the same topic in the ntfy app. Treat the topic name like a
+    # password — anyone who knows it can read these pings.
+    topic = os.environ.get("NTFY_TOPIC", "").strip()
+    if topic:
+        try:
+            import urllib.request
+            req = urllib.request.Request(
+                f"https://ntfy.sh/{topic}",
+                data=text.encode(),
+                headers={"Title": title, "Tags": "chart_with_downwards_trend"})
+            urllib.request.urlopen(req, timeout=10)
+        except Exception:
+            pass  # phone push is best-effort; never break the scan
 
 
 def _record(sig: dict) -> None:
