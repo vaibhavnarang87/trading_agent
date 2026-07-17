@@ -1,0 +1,44 @@
+############################################################
+DAILY BRIEFING — 2026-07-17   (information, not advice)
+############################################################
+
+STRATEGY SIGNAL (SPY intraday momentum, paper):
+  SPY 2026-07-17: first30 -0.787% -> FLAT (euphoria=False)
+
+WATCHLIST (ranked by what's notable today):
+------------------------------------------------------------
+AAPL   $333.74     100% of range  [near 52w HIGH]
+        beat rate 100%
+NKE    $43.76      8% of range  [near 52w LOW]
+        beat rate 100%
+AMZN   $247.23     64% of range
+        beat rate 86%
+MSFT   $393.82     22% of range
+        beat rate 100%
+GOOGL  $346.77     74% of range
+        beat rate 100%
+TSLA   $380.84     42% of range
+------------------------------------------------------------
+Reminder: crowd spikes are a RISK flag, not a buy signal. Earnings
+dates mean volatility, not direction. You decide and place trades.
+############################################################
+
+SCREEN — quality-dip candidates flagged for review (research, not advice):
+------------------------------------------------------------
+MSFT   $393.82     beaten down (22% of 52w range <= 30%); quality earnings (beat rate 100% >= 75%)
+NKE    $43.76      beaten down (8% of 52w range <= 30%); quality earnings (beat rate 100% >= 75%)
+------------------------------------------------------------
+A screen hit is a prompt to do your own research, not a recommendation
+to buy. Criteria are fixed and shown above; you decide and place trades.
+
+UNIVERSE SCAN — quality dips beyond the watchlist (research, not advice):
+------------------------------------------------------------
+ACN    $143.57     beaten down (13% of 52w range <= 30%); quality earnings (beat rate 100% >= 75%); outside watchlist (universe scan)
+AMT    $170.06     beaten down (13% of 52w range <= 30%); quality earnings (beat rate 75% >= 75%); outside watchlist (universe scan)
+CMCSA  $23.79      beaten down (18% of 52w range <= 30%); quality earnings (beat rate 100% >= 75%); outside watchlist (universe scan)
+CRM    $170.77     beaten down (18% of 52w range <= 30%); quality earnings (beat rate 100% >= 75%); outside watchlist (universe scan)
+IBM    $212.67     beaten down (1% of 52w range <= 30%); quality earnings (beat rate 100% >= 75%); outside watchlist (universe scan)
+------------------------------------------------------------
+Scanned ~104 large caps with fixed, shown criteria. A hit
+is a research prompt, not a recommendation. You decide and place trades.
+############################################################
