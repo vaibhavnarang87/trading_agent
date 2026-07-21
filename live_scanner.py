@@ -212,6 +212,99 @@ def _auto_execute(symbol: str) -> str:
     return f"EXECUTED: {result.get('status')}"
 
 
+# ---------- exit engine: the backtested sell rules, applied to real positions ----------
+# Same params the backtest validated: +10% target, -5% stop, 20-day time stop.
+EXIT_TARGET = float(os.environ.get("EXIT_TARGET_PCT", "10")) / 100
+EXIT_STOP = -abs(float(os.environ.get("EXIT_STOP_PCT", "5"))) / 100
+EXIT_TIME_DAYS = int(os.environ.get("EXIT_TIME_DAYS", "20"))
+
+
+def exit_decision(pnl: float, age_days: float) -> str | None:
+    """Pure, testable exit rule: target / stop / time, else hold."""
+    if pnl >= EXIT_TARGET:
+        return f"target +{EXIT_TARGET:.0%}"
+    if pnl <= EXIT_STOP:
+        return f"stop {EXIT_STOP:.0%}"
+    if age_days >= EXIT_TIME_DAYS:
+        return f"time {EXIT_TIME_DAYS}d"
+    return None
+
+
+def _sold_today() -> set[str]:
+    return {e.get("symbol", "") for e in _exec_today()
+            if e.get("order", "").startswith("SELL")} - {""}
+
+
+def check_exits() -> None:
+    """Apply the exit rules to every open position in the configured account.
+    Armed-only (same SCANNER_LIVE gate). Never sells a position opened today
+    (avoids PDT day-trades on a <$25k account); one sell attempt per symbol
+    per day; every action recorded + notified."""
+    executor, label = _get_executor()
+    if executor is None:
+        return
+    acct = os.environ.get("TRADING_ACCOUNT_NUMBER", "")
+    try:
+        positions = executor.rh.account.get_open_stock_positions(account_number=acct)
+    except Exception as e:
+        print(f"  exits: could not fetch positions: {e}")
+        return
+    sold = _sold_today()
+    today = date.today()
+    for pos in positions or []:
+        try:
+            qty = float(pos.get("quantity") or 0)
+            if qty <= 0:
+                continue
+            sym = executor.rh.stocks.get_symbol_by_url(pos["instrument"])
+            if not sym or sym in sold:
+                continue
+            avg = float(pos.get("average_buy_price") or 0)
+            if avg <= 0:
+                continue
+            created = pos.get("created_at", "")[:10]
+            age_days = (today - date.fromisoformat(created)).days if created else 0
+            if age_days < 1:
+                continue   # never same-day: no PDT day-trades
+            px_raw = executor.rh.stocks.get_latest_price(sym)
+            price = float(px_raw[0]) if px_raw and px_raw[0] else None
+            if not price:
+                continue
+            pnl = price / avg - 1
+            why = exit_decision(pnl, age_days)
+            if not why:
+                continue
+        except Exception as e:
+            print(f"  exits: skipping a position ({type(e).__name__}: {e})")
+            continue
+
+        from .poc.order import Order, OrderType, Side
+        order = Order(account_number=acct, symbol=sym, side=Side.SELL,
+                      type=OrderType.MARKET, quantity=round(qty, 6))
+
+        def _rec(status, real, extra=""):
+            os.makedirs(PRIVATE, exist_ok=True)
+            with open(EXECUTIONS, "a") as f:
+                f.write(json.dumps({
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "ref_id": order.ref_id, "symbol": sym,
+                    "order": order.describe(),
+                    "executor": label, "result_status": status,
+                    "real_money": real, "exit_reason": why,
+                    "pnl_at_signal": round(pnl, 4), "detail": extra}) + "\n")
+
+        try:
+            result = executor.place(order)
+        except Exception as e:
+            _rec("rejected", False, str(e))
+            _notify("Exit REJECTED", f"{order.describe()} ({why}) — {e}")
+            print(f"  EXIT {sym}: {why}, pnl {pnl:+.1%} -> REJECTED: {e}")
+            continue
+        _rec(result.get("status", "?"), result.get("real_money", False))
+        _notify("AUTO-SOLD", f"{order.describe()} — {why}, P&L {pnl:+.1%}")
+        print(f"  EXIT {sym}: {why}, pnl {pnl:+.1%} -> {result.get('status')}")
+
+
 class RangeCache:
     """52-week lows/highs per symbol, refreshed once per day (one batch call)."""
 
@@ -299,6 +392,8 @@ def run_forever() -> None:
         print(f"!!! AUTO-EXECUTION ARMED: {label}")
         print(f"    caps: governor per-order, {RiskLimits().max_trades_per_day} "
               f"trades/day, {MAX_REJECTIONS_PER_DAY}-rejection halt")
+        print(f"    exits: +{EXIT_TARGET:.0%} target / {EXIT_STOP:.0%} stop / "
+              f"{EXIT_TIME_DAYS}d time stop; no same-day sells (PDT-safe)")
     else:
         print("Signals notify + build governor-checked tickets. Not armed to execute "
               "(SCANNER_LIVE unset).")
@@ -306,6 +401,7 @@ def run_forever() -> None:
     while True:
         if market_open():
             try:
+                check_exits()                  # sells first: frees cash, cuts losers
                 n = scan(cache)
                 stamp = datetime.now(timezone.utc).isoformat(timespec='seconds')
                 print(f"[{stamp}] scanned; {len(n)} new signal(s)")

@@ -88,6 +88,11 @@ class RobinhoodExecutor(OrderExecutor):
                   else o.order_sell_fractional_by_price)
             resp = fn(order.symbol, order.dollar_amount, account_number=acct,
                       timeInForce=tif)
+        elif order.type == OrderType.MARKET and order.quantity is not None:
+            fn = (o.order_buy_market if order.side.value == "buy"
+                  else o.order_sell_market)
+            resp = fn(order.symbol, order.quantity, account_number=acct,
+                      timeInForce=tif)
         elif order.type == OrderType.LIMIT and order.quantity is not None:
             fn = (o.order_buy_limit if order.side.value == "buy"
                   else o.order_sell_limit)
