@@ -44,6 +44,12 @@ SIGNALS = os.path.join(PRIVATE, "signals.jsonl")
 SCAN_INTERVAL = int(os.environ.get("SCAN_INTERVAL", "300"))
 DROP_PCT = float(os.environ.get("SCAN_DROP_PCT", "2.5"))
 RANGE_MAX = float(os.environ.get("SCAN_RANGE_MAX", "0.35"))
+# Entry strategy (backtested head-to-head, 5y/40 names, same exits):
+#   dip-uptrend : down>=DROP_PCT% today AND price > 200-day MA   (tournament
+#                 winner: 51% win, +1.33% avg, median +0.40%, t=4.39)
+#   dip-range   : down>=DROP_PCT% today AND bottom RANGE_MAX of 52w range
+#                 (original rule: median trade negative)
+SCAN_STRATEGY = os.environ.get("SCAN_STRATEGY", "dip-uptrend").strip().lower()
 AUTO_TICKET = os.environ.get("SCAN_AUTO_TICKET", "1") == "1"
 
 # ---- AUTO-EXECUTION (off by default; ARMING IS THE USER'S ACT) ----
@@ -360,7 +366,9 @@ class RangeCache:
             except Exception:
                 failed_chunks += 1
                 continue
-        out = {s: (min(c), max(c)) for s, c in closes.items() if len(c) > 60}
+        out = {s: (min(c), max(c),
+                   sum(c[-200:]) / 200 if len(c) >= 200 else None)
+               for s, c in closes.items() if len(c) > 60}
         if failed_chunks:
             print(f"  range cache: {failed_chunks} robinhood chunk(s) failed")
         return out or None
@@ -374,7 +382,9 @@ class RangeCache:
             try:
                 c = df[s]["Close"].dropna()
                 if len(c) > 60:
-                    out[s] = (float(c.min()), float(c.max()))
+                    vals = [float(x) for x in c.tolist()]
+                    out[s] = (min(vals), max(vals),
+                              sum(vals[-200:]) / 200 if len(vals) >= 200 else None)
             except Exception:
                 continue
         return out
@@ -436,16 +446,23 @@ def scan(cache: RangeCache) -> list[dict]:
             continue
         last, prev = prices[s]
         day_chg = last / prev - 1
-        lo, hi = cache.lo_hi[s]
+        lo, hi, ma200 = cache.lo_hi[s]
         rp = (last - lo) / (hi - lo) if hi > lo else None
-        if rp is None:
-            continue
-        if day_chg <= -DROP_PCT / 100 and rp <= RANGE_MAX:
+        if SCAN_STRATEGY == "dip-uptrend":
+            # Tournament winner: pullback in a rising stock, not a falling knife
+            hit = (day_chg <= -DROP_PCT / 100
+                   and ma200 is not None and last > ma200)
+        else:  # dip-range (original rule)
+            hit = (day_chg <= -DROP_PCT / 100
+                   and rp is not None and rp <= RANGE_MAX)
+        if hit:
             sig = {
                 "ts": datetime.now(timezone.utc).isoformat(timespec="seconds"),
                 "symbol": s, "price": round(last, 2),
                 "day_change": round(day_chg, 4), "range_pos": round(rp, 3),
-                "rule": f"down>={DROP_PCT}% & range<={RANGE_MAX:.0%}",
+                "rule": (f"{SCAN_STRATEGY}: down>={DROP_PCT}% & "
+                         + ("price>200dMA" if SCAN_STRATEGY == "dip-uptrend"
+                            else f"range<={RANGE_MAX:.0%}")),
                 "data_source": source, "range_source": cache.source,
             }
             _record(sig)
@@ -471,8 +488,10 @@ def scan(cache: RangeCache) -> list[dict]:
 
 
 def run_forever() -> None:
+    trig = ("price>200dMA (dip-in-uptrend, tournament winner)"
+            if SCAN_STRATEGY == "dip-uptrend" else f"range<={RANGE_MAX:.0%}")
     print(f"Intraday scanner: every {SCAN_INTERVAL}s | trigger: "
-          f"down>={DROP_PCT}% & range<={RANGE_MAX:.0%} | auto-ticket: {AUTO_TICKET}")
+          f"down>={DROP_PCT}% & {trig} | auto-ticket: {AUTO_TICKET}")
     if SCANNER_LIVE:
         from .config import RiskLimits
         ex, label = _get_executor()
