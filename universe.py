@@ -18,7 +18,7 @@ from .screener import Candidate, ScreenThresholds, run_screen
 
 # Editable. Roughly the S&P 100: liquid, large-cap, equities-only.
 UNIVERSE = [
-    "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "BRK-B", "LLY",
+    "AAPL", "MSFT", "GOOGL", "AMZN", "NVDA", "META", "TSLA", "LLY",
     "V", "UNH", "XOM", "JPM", "JNJ", "PG", "MA", "AVGO", "HD", "CVX", "MRK",
     "ABBV", "COST", "PEP", "ADBE", "KO", "WMT", "CRM", "BAC", "MCD", "ACN",
     "NFLX", "AMD", "CSCO", "TMO", "LIN", "ORCL", "ABT", "CMCSA", "DIS",
@@ -27,7 +27,7 @@ UNIVERSE = [
     "ISRG", "BLK", "ELV", "SCHW", "BKNG", "PLD", "SYK", "AXP", "MDT", "LMT",
     "DE", "TJX", "MDLZ", "ADP", "CVS", "GILD", "C", "VRTX", "AMT", "CI",
     "REGN", "MO", "SBUX", "SO", "ZTS", "BMY", "DUK", "BDX", "TGT", "APD",
-    "PNC", "CL", "FDX", "ITW", "EMR", "CME", "USB", "MMC", "NOC", "NSC",
+    "PNC", "CL", "FDX", "ITW", "EMR", "CME", "USB", "NOC", "NSC",
     "COP", "EOG", "SLB", "PFE", "DHR",
 ]
 
