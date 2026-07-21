@@ -322,50 +322,119 @@ def check_exits() -> None:
         print(f"  EXIT {sym}: {why}, pnl {pnl:+.1%} -> {result.get('status')}")
 
 
+def _rh_session():
+    """Logged-in robin_stocks module from the armed executor, else None.
+    When present, ALL market data comes from Robinhood (same venue that
+    executes); Yahoo remains only as a fallback so signals survive outages."""
+    executor, _ = _get_executor()
+    return executor.rh if executor is not None else None
+
+
 class RangeCache:
-    """52-week lows/highs per symbol, refreshed once per day (one batch call)."""
+    """52-week lows/highs per symbol, refreshed once per day (one batch call).
+    Prefers Robinhood historicals; falls back to Yahoo."""
 
     def __init__(self):
         self.day = None
+        self.source = "?"
         self.lo_hi: dict[str, tuple[float, float]] = {}
 
-    def refresh_if_needed(self, symbols: list[str]) -> None:
-        if self.day == date.today():
-            return
+    def _from_robinhood(self, symbols: list[str]) -> dict | None:
+        rh = _rh_session()
+        if rh is None:
+            return None
+        closes: dict[str, list[float]] = {}
+        failed_chunks = 0
+        # Historicals endpoint rejects oversized batches — chunk it.
+        for i in range(0, len(symbols), 30):
+            chunk = symbols[i:i + 30]
+            try:
+                rows = rh.stocks.get_stock_historicals(
+                    chunk, interval="day", span="year") or []
+                for r in rows:
+                    if not r:
+                        continue
+                    sym, px = r.get("symbol"), r.get("close_price")
+                    if sym and px:
+                        closes.setdefault(sym, []).append(float(px))
+            except Exception:
+                failed_chunks += 1
+                continue
+        out = {s: (min(c), max(c)) for s, c in closes.items() if len(c) > 60}
+        if failed_chunks:
+            print(f"  range cache: {failed_chunks} robinhood chunk(s) failed")
+        return out or None
+
+    def _from_yahoo(self, symbols: list[str]) -> dict:
         import yfinance as yf
         df = yf.download(symbols, period="1y", interval="1d",
                          group_by="ticker", progress=False, threads=True)
-        self.lo_hi = {}
+        out = {}
         for s in symbols:
             try:
                 c = df[s]["Close"].dropna()
                 if len(c) > 60:
-                    self.lo_hi[s] = (float(c.min()), float(c.max()))
+                    out[s] = (float(c.min()), float(c.max()))
             except Exception:
                 continue
+        return out
+
+    def refresh_if_needed(self, symbols: list[str]) -> None:
+        if self.day == date.today():
+            return
+        rh_data = self._from_robinhood(symbols)
+        self.lo_hi = rh_data if rh_data else self._from_yahoo(symbols)
+        self.source = "robinhood" if rh_data else "yahoo-fallback"
         self.day = date.today()
+
+
+def _live_prices(symbols: list[str]) -> tuple[dict[str, tuple[float, float]], str]:
+    """{symbol: (last, prev_close)} — Robinhood real-time batch quotes when the
+    session is live, else Yahoo daily bars as fallback."""
+    rh = _rh_session()
+    if rh is not None:
+        try:
+            out = {}
+            for q in rh.stocks.get_quotes(symbols) or []:
+                if not q:
+                    continue
+                sym = q.get("symbol")
+                last = q.get("last_trade_price")
+                prev = q.get("adjusted_previous_close") or q.get("previous_close")
+                if sym and last and prev:
+                    out[sym] = (float(last), float(prev))
+            if out:
+                return out, "robinhood"
+        except Exception as e:
+            print(f"  quotes: robinhood failed ({e}); using yahoo")
+    import yfinance as yf
+    df = yf.download(symbols, period="2d", interval="1d",
+                     group_by="ticker", progress=False, threads=True)
+    out = {}
+    for s in symbols:
+        try:
+            closes = df[s]["Close"].dropna()
+            if len(closes) >= 2:
+                out[s] = (float(closes.iloc[-1]), float(closes.iloc[-2]))
+        except Exception:
+            continue
+    return out, "yahoo-fallback"
 
 
 def scan(cache: RangeCache) -> list[dict]:
     """One pass: fetch latest prices, apply trigger, emit new signals."""
-    import yfinance as yf
     symbols = _symbols()
-    cache.refresh_if_needed(symbols)
     already = _signaled_today()
 
-    df = yf.download(symbols, period="2d", interval="1d",
-                     group_by="ticker", progress=False, threads=True)
+    prices, source = _live_prices(symbols)
+    # Refresh ranges using only symbols the quote source recognizes — keeps
+    # dead tickers from poisoning the historicals batches.
+    cache.refresh_if_needed(sorted(prices) if source == "robinhood" else symbols)
     fired = []
     for s in symbols:
-        if s in already or s not in cache.lo_hi:
+        if s in already or s not in cache.lo_hi or s not in prices:
             continue
-        try:
-            closes = df[s]["Close"].dropna()
-            if len(closes) < 2:
-                continue
-            prev, last = float(closes.iloc[-2]), float(closes.iloc[-1])
-        except Exception:
-            continue
+        last, prev = prices[s]
         day_chg = last / prev - 1
         lo, hi = cache.lo_hi[s]
         rp = (last - lo) / (hi - lo) if hi > lo else None
@@ -377,6 +446,7 @@ def scan(cache: RangeCache) -> list[dict]:
                 "symbol": s, "price": round(last, 2),
                 "day_change": round(day_chg, 4), "range_pos": round(rp, 3),
                 "rule": f"down>={DROP_PCT}% & range<={RANGE_MAX:.0%}",
+                "data_source": source, "range_source": cache.source,
             }
             _record(sig)
             _notify("Stock signal",
