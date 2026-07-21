@@ -130,22 +130,39 @@ def _exec_today() -> list[dict]:
     return [e for e in _exec_rows() if e.get("ts", "").startswith(today)]
 
 
+LOGIN_RETRY_SECONDS = int(os.environ.get("SCAN_LOGIN_RETRY_SECONDS", str(6 * 3600)))
+
+
 def _get_executor():
     """Real executor only when the user has armed SCANNER_LIVE and configured
-    robinhood. Headless: relies on the cached robin_stocks token; if login
-    needs interactive MFA it fails gracefully to signals-only."""
+    robinhood. Login failures are retried every LOGIN_RETRY_SECONDS so the bot
+    self-heals (and notifies) when the broker login path starts working again
+    — e.g. after a robin_stocks patch for an upstream breakage."""
     if _EXECUTOR_CACHE:
-        return _EXECUTOR_CACHE[0], _EXECUTOR_CACHE[1]
+        ex, label, ts, had_failed = _EXECUTOR_CACHE
+        if ex is not None or not SCANNER_LIVE:
+            return ex, label
+        if time.time() - ts < LOGIN_RETRY_SECONDS:
+            return ex, label   # failed recently; wait before retrying
     if not (SCANNER_LIVE and os.environ.get("TRADING_EXECUTOR", "").lower() == "robinhood"):
-        _EXECUTOR_CACHE[:] = [None, "auto-exec off (SCANNER_LIVE not set)"]
+        _EXECUTOR_CACHE[:] = [None, "auto-exec off (SCANNER_LIVE not set)", time.time(), False]
     else:
+        had_failed = bool(_EXECUTOR_CACHE) and _EXECUTOR_CACHE[3]
         try:
             from .live_executor import RobinhoodExecutor
-            _EXECUTOR_CACHE[:] = [RobinhoodExecutor(), "ROBINHOOD — REAL MONEY (auto)"]
+            _EXECUTOR_CACHE[:] = [RobinhoodExecutor(),
+                                  "ROBINHOOD — REAL MONEY (auto)", time.time(), False]
+            if had_failed:
+                _notify("Auto-exec RESTORED",
+                        "Robinhood login works again — autonomous trading resumed.")
+                print("  auto-exec RESTORED: login succeeded on retry")
         except Exception as e:
-            _EXECUTOR_CACHE[:] = [None, f"auto-exec disabled: {e}"]
-            _notify("Auto-exec disabled",
-                    "Robinhood login failed headless — run the console once to refresh the token.")
+            first_failure = not had_failed
+            _EXECUTOR_CACHE[:] = [None, f"auto-exec disabled: {e}", time.time(), True]
+            if first_failure:
+                _notify("Auto-exec disabled",
+                        "Robinhood login failed — will retry every "
+                        f"{LOGIN_RETRY_SECONDS//3600}h and notify when restored.")
     return _EXECUTOR_CACHE[0], _EXECUTOR_CACHE[1]
 
 
@@ -388,8 +405,13 @@ def run_forever() -> None:
           f"down>={DROP_PCT}% & range<={RANGE_MAX:.0%} | auto-ticket: {AUTO_TICKET}")
     if SCANNER_LIVE:
         from .config import RiskLimits
-        _, label = _get_executor()
-        print(f"!!! AUTO-EXECUTION ARMED: {label}")
+        ex, label = _get_executor()
+        if ex is None:
+            print(f"AUTO-EXECUTION NOT ACTIVE — {label}")
+            print(f"    (retrying login every {LOGIN_RETRY_SECONDS//3600}h; "
+                  f"phone will be notified when restored)")
+        else:
+            print(f"!!! AUTO-EXECUTION ARMED: {label}")
         print(f"    caps: governor per-order, {RiskLimits().max_trades_per_day} "
               f"trades/day, {MAX_REJECTIONS_PER_DAY}-rejection halt")
         print(f"    exits: +{EXIT_TARGET:.0%} target / {EXIT_STOP:.0%} stop / "
