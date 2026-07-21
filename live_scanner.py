@@ -25,6 +25,7 @@ SCAN_RANGE_MAX (default 0.35), SCAN_AUTO_TICKET (default 1).
 """
 from __future__ import annotations
 
+import glob
 import json
 import os
 import subprocess
@@ -44,6 +45,21 @@ SCAN_INTERVAL = int(os.environ.get("SCAN_INTERVAL", "300"))
 DROP_PCT = float(os.environ.get("SCAN_DROP_PCT", "2.5"))
 RANGE_MAX = float(os.environ.get("SCAN_RANGE_MAX", "0.35"))
 AUTO_TICKET = os.environ.get("SCAN_AUTO_TICKET", "1") == "1"
+
+# ---- AUTO-EXECUTION (off by default; ARMING IS THE USER'S ACT) ----
+# SCANNER_LIVE=1 makes the scanner PLACE each signal's governor-approved
+# ticket through the user's own executor instead of waiting for a click.
+# Gates that always apply, armed or not:
+#   - ticket must be governor-approved and live-armed (plan armed via
+#     TRADING_GO_LIVE, order caps, cash checks)
+#   - max_trades_per_day cap shared with the console (executions ledger)
+#   - no double-fires (ref_id dedupe)
+#   - REJECTION HALT: 3 broker rejections in a day disables auto-exec until
+#     tomorrow (protects against error loops, e.g. compliance blocks)
+SCANNER_LIVE = os.environ.get("SCANNER_LIVE", "") == "1"
+MAX_REJECTIONS_PER_DAY = 3
+EXECUTIONS = os.path.join(PRIVATE, "executions.jsonl")
+_EXECUTOR_CACHE: list = []   # [executor, label] once initialized
 
 WATCH_EXTRA = ["AAPL", "AMZN", "MSFT", "GOOGL", "NKE", "TSLA"]
 
@@ -99,6 +115,101 @@ def _record(sig: dict) -> None:
     os.makedirs(PRIVATE, exist_ok=True)
     with open(SIGNALS, "a") as f:
         f.write(json.dumps(sig) + "\n")
+
+
+# ---------- auto-execution (armed only by the user via SCANNER_LIVE=1) ----------
+
+def _exec_rows() -> list[dict]:
+    if not os.path.exists(EXECUTIONS):
+        return []
+    return [json.loads(l) for l in open(EXECUTIONS) if l.strip()]
+
+
+def _exec_today() -> list[dict]:
+    today = date.today().isoformat()
+    return [e for e in _exec_rows() if e.get("ts", "").startswith(today)]
+
+
+def _get_executor():
+    """Real executor only when the user has armed SCANNER_LIVE and configured
+    robinhood. Headless: relies on the cached robin_stocks token; if login
+    needs interactive MFA it fails gracefully to signals-only."""
+    if _EXECUTOR_CACHE:
+        return _EXECUTOR_CACHE[0], _EXECUTOR_CACHE[1]
+    if not (SCANNER_LIVE and os.environ.get("TRADING_EXECUTOR", "").lower() == "robinhood"):
+        _EXECUTOR_CACHE[:] = [None, "auto-exec off (SCANNER_LIVE not set)"]
+    else:
+        try:
+            from .live_executor import RobinhoodExecutor
+            _EXECUTOR_CACHE[:] = [RobinhoodExecutor(), "ROBINHOOD — REAL MONEY (auto)"]
+        except Exception as e:
+            _EXECUTOR_CACHE[:] = [None, f"auto-exec disabled: {e}"]
+            _notify("Auto-exec disabled",
+                    "Robinhood login failed headless — run the console once to refresh the token.")
+    return _EXECUTOR_CACHE[0], _EXECUTOR_CACHE[1]
+
+
+def _auto_execute(symbol: str) -> str:
+    """Place the newest governor-approved live-armed ticket for `symbol`.
+    Every gate must pass; any failure is recorded and never retried."""
+    executor, label = _get_executor()
+    if executor is None:
+        return label
+
+    files = sorted(glob.glob(os.path.join(PRIVATE, "trade_plan_*.json")))
+    if not files:
+        return "no plan"
+    plan = json.load(open(files[-1]))
+    if not plan.get("armed"):
+        return "plan not armed (TRADING_GO_LIVE)"
+    tickets = [t for t in plan.get("tickets", [])
+               if t.get("symbol") == symbol and t.get("approved")
+               and t.get("status") == "live-armed"]
+    if not tickets:
+        return "no approved live-armed ticket"
+    ticket = tickets[-1]
+    ref = ticket["broker_params"]["ref_id"]
+
+    done = {e.get("ref_id") for e in _exec_rows()}
+    if ref in done:
+        return "already executed"
+    today_rows = _exec_today()
+    from .config import RiskLimits
+    limits = RiskLimits()
+    fills = [e for e in today_rows if e.get("result_status") not in (None, "rejected")]
+    rejections = [e for e in today_rows if e.get("result_status") == "rejected"]
+    if len(fills) >= limits.max_trades_per_day:
+        return f"daily trade cap reached ({limits.max_trades_per_day})"
+    if len(rejections) >= MAX_REJECTIONS_PER_DAY:
+        return "REJECTION HALT: too many broker rejections today, auto-exec paused"
+
+    from .poc.order import Order, OrderType, Side
+    p = ticket["broker_params"]
+    order = Order(account_number=p["account_number"], symbol=p["symbol"],
+                  side=Side(p["side"]), type=OrderType(p["type"]),
+                  dollar_amount=float(p["dollar_amount"]) if p.get("dollar_amount") else None,
+                  quantity=float(p["quantity"]) if p.get("quantity") else None,
+                  limit_price=float(p["limit_price"]) if p.get("limit_price") else None,
+                  time_in_force=p.get("time_in_force", "gfd"), ref_id=ref)
+
+    def _rec(status, real, extra=""):
+        os.makedirs(PRIVATE, exist_ok=True)
+        with open(EXECUTIONS, "a") as f:
+            f.write(json.dumps({
+                "ts": datetime.now(timezone.utc).isoformat(),
+                "ref_id": ref, "order": order.describe(),
+                "executor": label, "result_status": status,
+                "real_money": real, "detail": extra}) + "\n")
+
+    try:
+        result = executor.place(order)
+    except Exception as e:
+        _rec("rejected", False, str(e))
+        _notify("Order REJECTED", f"{order.describe()} — {e}")
+        return f"rejected: {e}"
+    _rec(result.get("status", "?"), result.get("real_money", False))
+    _notify("AUTO-EXECUTED", f"{order.describe()} -> {result.get('status')}")
+    return f"EXECUTED: {result.get('status')}"
 
 
 class RangeCache:
@@ -170,16 +281,27 @@ def scan(cache: RangeCache) -> list[dict]:
                     pass
                 except Exception as e:
                     sig["ticket_error"] = str(e)
+            if SCANNER_LIVE and AUTO_TICKET and "ticket_error" not in sig:
+                sig["auto_exec"] = _auto_execute(s)
             fired.append(sig)
             print(f"  SIGNAL {s}: {day_chg:+.1%} today, range {rp:.0%} "
-                  f"-> notified{' + ticket' if AUTO_TICKET else ''}")
+                  f"-> notified{' + ticket' if AUTO_TICKET else ''}"
+                  f"{' | auto: ' + sig['auto_exec'] if 'auto_exec' in sig else ''}")
     return fired
 
 
 def run_forever() -> None:
     print(f"Intraday scanner: every {SCAN_INTERVAL}s | trigger: "
           f"down>={DROP_PCT}% & range<={RANGE_MAX:.0%} | auto-ticket: {AUTO_TICKET}")
-    print("Signals notify + build governor-checked tickets. Never executes.")
+    if SCANNER_LIVE:
+        from .config import RiskLimits
+        _, label = _get_executor()
+        print(f"!!! AUTO-EXECUTION ARMED: {label}")
+        print(f"    caps: governor per-order, {RiskLimits().max_trades_per_day} "
+              f"trades/day, {MAX_REJECTIONS_PER_DAY}-rejection halt")
+    else:
+        print("Signals notify + build governor-checked tickets. Not armed to execute "
+              "(SCANNER_LIVE unset).")
     cache = RangeCache()
     while True:
         if market_open():
