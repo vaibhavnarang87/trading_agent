@@ -54,6 +54,16 @@ class RobinhoodExecutor(OrderExecutor):
         # Interactive: robin_stocks prompts for MFA in the terminal — that
         # prompt is you, personally, authorizing this session.
         self.rh.login(user, pwd)
+        # robin_stocks can FAIL login without raising (expired token + headless
+        # challenge). Verify, or an "armed" bot would silently bounce every
+        # order. Raise -> callers label auto-exec disabled and notify.
+        import robin_stocks.robinhood.helper as _helper
+        if not getattr(_helper, "LOGGED_IN", False):
+            raise RuntimeError(
+                "Robinhood login failed (session expired; interactive approval "
+                "needed). Run `python -m trading_agent.local_app` in a terminal "
+                "once to re-login, then reload the scanner."
+            )
 
     def _verify_account(self, account_number: str) -> None:
         """Confirm the target account exists and is reachable by this login.
