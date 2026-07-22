@@ -28,8 +28,9 @@ class RiskLimits:
     max_position_pct: float = 0.10           # max % of account in one order
     max_position_per_symbol_pct: float = 0.20  # max % of account held in one symbol
 
-    # Activity ceilings
-    max_trades_per_day: int = 5
+    # Activity ceilings. Cap applies to BUYS only — exits are never capped
+    # (you must always be able to sell a position, even on a busy buy day).
+    max_trades_per_day: int = 10
 
     # Loss controls (absolute $ — realized P&L for the day)
     max_daily_loss: float = 150.0            # halts trading for the day if hit

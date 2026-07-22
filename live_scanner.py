@@ -200,10 +200,14 @@ def _auto_execute(symbol: str) -> str:
     today_rows = _exec_today()
     from .config import RiskLimits
     limits = RiskLimits()
-    fills = [e for e in today_rows if e.get("result_status") not in (None, "rejected")]
+    # Cap counts BUY fills only — sells (exits) are never blocked, so a busy
+    # buy day can never trap you in a losing position.
+    buy_fills = [e for e in today_rows
+                 if e.get("result_status") not in (None, "rejected")
+                 and not e.get("order", "").startswith("SELL")]
     rejections = [e for e in today_rows if e.get("result_status") == "rejected"]
-    if len(fills) >= limits.max_trades_per_day:
-        return f"daily trade cap reached ({limits.max_trades_per_day})"
+    if len(buy_fills) >= limits.max_trades_per_day:
+        return f"daily BUY cap reached ({limits.max_trades_per_day}; sells still allowed)"
     if len(rejections) >= MAX_REJECTIONS_PER_DAY:
         return "REJECTION HALT: too many broker rejections today, auto-exec paused"
 
