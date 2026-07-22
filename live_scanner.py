@@ -274,13 +274,18 @@ def check_exits() -> None:
         return
     sold = _sold_today()
     today = date.today()
+    try:
+        from .berkshire_clone import clone_symbols
+        cloned = clone_symbols()   # held until Berkshire sells, not +10/-5/20d
+    except Exception:
+        cloned = set()
     for pos in positions or []:
         try:
             qty = float(pos.get("quantity") or 0)
             if qty <= 0:
                 continue
             sym = executor.rh.stocks.get_symbol_by_url(pos["instrument"])
-            if not sym or sym in sold:
+            if not sym or sym in sold or sym in cloned:
                 continue
             avg = float(pos.get("average_buy_price") or 0)
             if avg <= 0:
