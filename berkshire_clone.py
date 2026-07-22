@@ -29,7 +29,18 @@ import os
 import re
 import sys
 import urllib.request
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
+
+from .env_file import load_env_file
+
+load_env_file()
+
+# ---- ARMING (the user's act, never the assistant's) ----
+# CLONE_LIVE=1 in ~/.trading_agent.env makes each run AUTO-EXECUTE the clone:
+# buys new/added top-10 names and sells positions Berkshire dropped, through
+# the same executor + gates as the scanner (daily trade cap, dedupe,
+# rejection halt, no same-day sells). Unarmed, it only builds tickets.
+CLONE_LIVE = os.environ.get("CLONE_LIVE") == "1"
 
 HERE = os.path.dirname(__file__)
 PRIVATE = os.path.join(HERE, "data", "private")
@@ -132,6 +143,61 @@ def clone_symbols() -> set[str]:
     return set(load_state().get("symbols", []))
 
 
+def _auto_deploy(symbols: list[str]) -> None:
+    """Armed only: execute the clone's un-executed tickets through the shared
+    gate chain (governor approval, daily cap, dedupe, rejection halt)."""
+    import trading_agent.live_scanner as sc
+    executor, label = sc._get_executor()
+    if executor is None:
+        print(f"  auto-deploy unavailable: {label}")
+        return
+    for s in symbols:
+        outcome = sc._auto_execute(s)
+        print(f"  {s:<6} -> {outcome}")
+        if "daily trade cap" in outcome:
+            print("  (cap reached — the daily run will deploy the rest tomorrow)")
+            break
+
+
+def _auto_sell_dropped(dropped: list[str]) -> None:
+    """Armed only: sell whole positions in names Berkshire dropped."""
+    if not dropped:
+        return
+    import trading_agent.live_scanner as sc
+    from .poc.order import Order, OrderType, Side
+    executor, label = sc._get_executor()
+    if executor is None:
+        return
+    acct = os.environ.get("TRADING_ACCOUNT_NUMBER", "")
+    positions = executor.rh.account.get_open_stock_positions(account_number=acct) or []
+    today = date.today()
+    for pos in positions:
+        try:
+            qty = float(pos.get("quantity") or 0)
+            if qty <= 0:
+                continue
+            sym = executor.rh.stocks.get_symbol_by_url(pos["instrument"])
+            if sym not in dropped:
+                continue
+            created = pos.get("created_at", "")[:10]
+            if created and (today - date.fromisoformat(created)).days < 1:
+                continue   # PDT-safe: never same-day
+            order = Order(account_number=acct, symbol=sym, side=Side.SELL,
+                          type=OrderType.MARKET, quantity=round(qty, 6))
+            result = executor.place(order)
+            with open(os.path.join(PRIVATE, "executions.jsonl"), "a") as f:
+                f.write(json.dumps({
+                    "ts": datetime.now(timezone.utc).isoformat(),
+                    "ref_id": order.ref_id, "symbol": sym,
+                    "order": order.describe(), "executor": label,
+                    "result_status": result.get("status"),
+                    "real_money": result.get("real_money", False),
+                    "exit_reason": "berkshire dropped from 13F"}) + "\n")
+            print(f"  SOLD {sym} (dropped from 13F) -> {result.get('status')}")
+        except Exception as e:
+            print(f"  sell {pos.get('instrument','?')[-13:]}: {type(e).__name__}: {e}")
+
+
 def run(show_only: bool = False) -> None:
     acc, fdate, xml = latest_13f_infotable()
     top = parse_top_holdings(xml)
@@ -167,7 +233,13 @@ def run(show_only: bool = False) -> None:
     print(f"\nClone state saved ({len(now)} symbols). The exit engine will "
           f"SKIP these — they are held until Berkshire's next filing, not "
           f"managed by +10%/-5%/20d.")
-    print("Deploying is YOUR click: the tickets are in the console.")
+    if CLONE_LIVE:
+        print("\nCLONE_LIVE armed — auto-deploying through the shared gates:")
+        _auto_deploy(now)
+        _auto_sell_dropped(dropped)
+    else:
+        print("Not armed (CLONE_LIVE unset): deploying is YOUR click — the "
+              "tickets are in the console.")
 
 
 if __name__ == "__main__":
