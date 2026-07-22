@@ -117,10 +117,26 @@ class RobinhoodExecutor(OrderExecutor):
         if not isinstance(resp, dict) or not resp.get("id"):
             raise RuntimeError(
                 f"Order was NOT accepted by Robinhood. Response: {resp}")
+        # An order ID is NOT acceptance: Robinhood can reject milliseconds
+        # later (a real ADP order did exactly that while we logged 'submitted').
+        # Re-fetch the order and check its actual state.
+        import time as _time
+        state = resp.get("state")
+        try:
+            _time.sleep(2)
+            info = self.rh.orders.get_stock_order_info(resp["id"])
+            if isinstance(info, dict) and info.get("state"):
+                state = info["state"]
+        except Exception:
+            pass  # keep the creation-time state if the re-fetch fails
+        if state in ("rejected", "cancelled", "failed", "voided"):
+            raise RuntimeError(
+                f"Order {state} by Robinhood after submission "
+                f"(order id {resp['id']}).")
         return {"status": "submitted", "real_money": True,
                 "order": order.describe(), "account": acct,
                 "ref_id": order.ref_id, "broker_order_id": resp.get("id"),
-                "broker_state": resp.get("state"), "broker_response": resp}
+                "broker_state": state, "broker_response": resp}
 
 
 def get_executor() -> tuple[OrderExecutor, str]:
