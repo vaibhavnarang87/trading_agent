@@ -195,7 +195,10 @@ def _auto_execute(symbol: str) -> str:
     ticket = tickets[-1]
     ref = ticket["broker_params"]["ref_id"]
 
-    done = {e.get("ref_id") for e in _exec_rows()}
+    # Only a SUCCESSFUL prior execution blocks a retry — a rejected order
+    # (e.g. blocked by unsettled cash) must be retryable once funds settle.
+    done = {e.get("ref_id") for e in _exec_rows()
+            if e.get("result_status") not in ("rejected", None)}
     if ref in done:
         return "already executed"
     today_rows = _exec_today()
