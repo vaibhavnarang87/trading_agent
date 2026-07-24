@@ -144,7 +144,8 @@ def _get_executor():
     robinhood. Login failures are retried every LOGIN_RETRY_SECONDS so the bot
     self-heals (and notifies) when the broker login path starts working again
     — e.g. after a robin_stocks patch for an upstream breakage."""
-    armed_any = SCANNER_LIVE or os.environ.get("CLONE_LIVE") == "1"
+    armed_any = (SCANNER_LIVE or os.environ.get("CLONE_LIVE") == "1"
+                 or os.environ.get("MOMENTUM_LIVE") == "1")
     if _EXECUTOR_CACHE:
         ex, label, ts, had_failed = _EXECUTOR_CACHE
         if ex is not None or not armed_any:
