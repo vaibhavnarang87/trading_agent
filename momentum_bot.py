@@ -33,6 +33,11 @@ load_env_file()
 
 MOMENTUM_LIVE = os.environ.get("MOMENTUM_LIVE") == "1"
 TOP_N = int(os.environ.get("MOMENTUM_TOP_N", "10"))
+# Hysteresis: a held name is only SOLD once it falls past this rank, not the
+# instant it leaves the top-N. Without this, running intraday makes a stock
+# hovering at rank 10/11 churn (sell/rebuy) — which on a cash account causes
+# good-faith violations. Buy at rank<=TOP_N, sell at rank>SELL_RANK.
+SELL_RANK = int(os.environ.get("MOMENTUM_SELL_RANK", str(TOP_N + 5)))
 ACCOUNT = os.environ.get("TRADING_ACCOUNT_NUMBER", "PAPER-ACCOUNT")
 DCA_SYMBOL = os.environ.get("DCA_SYMBOL", "VOO")
 HERE = os.path.dirname(__file__)
@@ -48,7 +53,8 @@ UNIVERSE = [
 
 
 def rank_momentum() -> list[tuple[str, float]]:
-    """Top-N by trailing 12-1 month return. yfinance daily -> ~252d/~21d."""
+    """FULL ranking by trailing 12-1 month return (best first). Callers take
+    [:TOP_N] as the buy target and use rank position for sell hysteresis."""
     import yfinance as yf
     df = yf.download(UNIVERSE, period="2y", interval="1d",
                      group_by="ticker", progress=False, threads=True)
@@ -64,7 +70,7 @@ def rank_momentum() -> list[tuple[str, float]]:
         except Exception:
             continue
     scored.sort(key=lambda kv: -kv[1])
-    return scored[:TOP_N]
+    return scored
 
 
 def _excluded() -> set[str]:
@@ -90,11 +96,14 @@ def _record(order, status, real, extra=""):
 
 
 def rebalance(execute: bool) -> None:
-    top = rank_momentum()
+    ranking = rank_momentum()
+    top = ranking[:TOP_N]
     target = {s for s, _ in top}
+    rank_of = {s: i + 1 for i, (s, _) in enumerate(ranking)}
     excluded = _excluded()
 
-    print(f"Momentum 12-1 target top-{TOP_N} (as of {date.today()}):")
+    print(f"Momentum 12-1 target top-{TOP_N} (as of {date.today()}), "
+          f"sell below rank {SELL_RANK}:")
     for s, mom in top:
         print(f"  {s:<6} {mom:+.1%} trailing 12-1")
     if target & excluded:
@@ -119,11 +128,13 @@ def rebalance(execute: bool) -> None:
         held[sym] = (q, p.get("created_at", "")[:10])
 
     momentum_held = {s for s in held if s not in excluded}
-    to_sell = sorted(momentum_held - target)      # dropped out of ranking
+    # Hysteresis: sell only once a name has fallen PAST SELL_RANK (or vanished
+    # from the ranking), not merely out of the top-N. Prevents intraday churn.
+    to_sell = sorted(s for s in momentum_held if rank_of.get(s, 10**6) > SELL_RANK)
     to_buy = sorted(target - set(held) - excluded)  # new names not held
 
     print(f"\nRebalance plan:")
-    print(f"  SELL (dropped out): {to_sell or 'none'}")
+    print(f"  SELL (fell past rank {SELL_RANK}): {to_sell or 'none'}")
     print(f"  BUY  (new top-{TOP_N}): {to_buy or 'none'}")
     print(f"  HELD (still top-{TOP_N}): {sorted(momentum_held & target) or 'none'}")
 
