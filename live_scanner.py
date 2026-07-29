@@ -283,11 +283,20 @@ def check_exits() -> None:
         return
     sold = _sold_today()
     today = date.today()
+    # Positions owned by another strategy have their OWN exit rule; this
+    # engine must not apply +10%/-5%/20d to them or the two rules fight
+    # (sell here, rebuy there = churn + cash-account good-faith violations).
+    cloned = set()
     try:
         from .berkshire_clone import clone_symbols
-        cloned = clone_symbols()   # held until Berkshire sells, not +10/-5/20d
+        cloned |= clone_symbols()      # exits on Berkshire's 13F, not a stop
     except Exception:
-        cloned = set()
+        pass
+    try:
+        from .momentum_bot import momentum_symbols
+        cloned |= momentum_symbols()   # exits on momentum rank, not a stop
+    except Exception:
+        pass
     for pos in positions or []:
         try:
             qty = float(pos.get("quantity") or 0)

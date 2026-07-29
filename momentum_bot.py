@@ -73,6 +73,26 @@ def rank_momentum() -> list[tuple[str, float]]:
     return scored
 
 
+STATE = os.path.join(PRIVATE, "momentum_state.json")
+
+
+def momentum_symbols() -> set[str]:
+    """Symbols under momentum management. The dip-scanner's exit engine must
+    SKIP these — momentum's exit is 'fell past rank N', not a -5% stop. Two
+    engines with different exit rules on one position causes sell/rebuy churn."""
+    try:
+        return set(json.load(open(STATE)).get("symbols", []))
+    except Exception:
+        return set()
+
+
+def _save_state(symbols: list[str]) -> None:
+    os.makedirs(PRIVATE, exist_ok=True)
+    json.dump({"symbols": sorted(symbols),
+               "updated": datetime.now(timezone.utc).isoformat()},
+              open(STATE, "w"), indent=2)
+
+
 def _excluded() -> set[str]:
     """Symbols momentum must NOT touch: Berkshire clone + DCA target."""
     ex = {DCA_SYMBOL}
@@ -132,6 +152,9 @@ def rebalance(execute: bool) -> None:
     # from the ranking), not merely out of the top-N. Prevents intraday churn.
     to_sell = sorted(s for s in momentum_held if rank_of.get(s, 10**6) > SELL_RANK)
     to_buy = sorted(target - set(held) - excluded)  # new names not held
+
+    # Record what momentum owns/wants so the dip-scanner's exit engine skips it.
+    _save_state(sorted((momentum_held | target) - excluded))
 
     print(f"\nRebalance plan:")
     print(f"  SELL (fell past rank {SELL_RANK}): {to_sell or 'none'}")
