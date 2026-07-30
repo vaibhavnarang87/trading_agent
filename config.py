@@ -23,9 +23,11 @@ class RiskLimits:
 
     All percentages are fractions of current account value (0.10 == 10%).
     """
-    # Per-order sizing
-    max_order_value: float = 250.0           # absolute $ cap on any single order
-    max_position_pct: float = 0.10           # max % of account in one order
+    # Per-order sizing. Raised from 250/0.10 to support the Mom5-Pullback
+    # concentration (5 positions of ~$600 instead of 10 of $200). This is a
+    # deliberate risk INCREASE: a single bad name now costs ~3x what it did.
+    max_order_value: float = 700.0           # absolute $ cap on any single order
+    max_position_pct: float = 0.15           # max % of account in one order
     max_position_per_symbol_pct: float = 0.20  # max % of account held in one symbol
 
     # Activity ceilings. Cap applies to BUYS only — exits are never capped

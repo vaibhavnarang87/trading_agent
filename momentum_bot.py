@@ -32,7 +32,14 @@ from .env_file import load_env_file
 load_env_file()
 
 MOMENTUM_LIVE = os.environ.get("MOMENTUM_LIVE") == "1"
-TOP_N = int(os.environ.get("MOMENTUM_TOP_N", "10"))
+# Mom5-Pullback (hybrid tournament winner, 8y +39.5% CAGR / Sharpe 1.16;
+# 18y +15.1% CAGR vs +12.2% for the old Mom10, and beat SPY through 2008/2022).
+# Concentration = 5 names. Pullback timing = only ENTER a top-ranked name on a
+# short-term dip (RSI(2)<10 or a -2% day), instead of buying at any price.
+TOP_N = int(os.environ.get("MOMENTUM_TOP_N", "5"))
+PULLBACK = os.environ.get("MOMENTUM_PULLBACK", "1") == "1"
+PULLBACK_RSI = float(os.environ.get("MOMENTUM_PULLBACK_RSI", "10"))
+PULLBACK_DROP = float(os.environ.get("MOMENTUM_PULLBACK_DROP", "2")) / 100
 # Hysteresis: a held name is only SOLD once it falls past this rank, not the
 # instant it leaves the top-N. Without this, running intraday makes a stock
 # hovering at rank 10/11 churn (sell/rebuy) — which on a cash account causes
@@ -52,25 +59,62 @@ UNIVERSE = [
 ]
 
 
-def rank_momentum() -> list[tuple[str, float]]:
-    """FULL ranking by trailing 12-1 month return (best first). Callers take
-    [:TOP_N] as the buy target and use rank position for sell hysteresis."""
+def _rsi2(closes: list[float], period: int = 2) -> float | None:
+    """Wilder RSI(2) on the latest bar — the pullback trigger."""
+    if len(closes) < period + 2:
+        return None
+    ag = al = None
+    for i in range(1, len(closes)):
+        ch = closes[i] - closes[i - 1]
+        g, l = max(ch, 0.0), max(-ch, 0.0)
+        if i == period:
+            gs = [max(closes[k] - closes[k - 1], 0.0) for k in range(1, period + 1)]
+            ls = [max(closes[k - 1] - closes[k], 0.0) for k in range(1, period + 1)]
+            ag, al = sum(gs) / period, sum(ls) / period
+        elif i > period:
+            ag = (ag * (period - 1) + g) / period
+            al = (al * (period - 1) + l) / period
+    if ag is None:
+        return None
+    return 100.0 if al == 0 else 100 - 100 / (1 + ag / al)
+
+
+def pullback_ready(closes: list[float]) -> tuple[bool, str]:
+    """Entry timing: is this name currently dipping? (RSI(2) oversold or a
+    sharp down day). Applied ONLY to names momentum already selected — the
+    tournament showed this timing adds ~7 pts of CAGR there, while the same
+    patterns applied to all stocks lose money."""
+    if not PULLBACK:
+        return True, "no timing filter"
+    r = _rsi2(closes)
+    day = closes[-1] / closes[-2] - 1 if len(closes) >= 2 else 0.0
+    if r is not None and r < PULLBACK_RSI:
+        return True, f"RSI(2) {r:.0f} < {PULLBACK_RSI:.0f}"
+    if day <= -PULLBACK_DROP:
+        return True, f"down {day:.1%} today"
+    return False, (f"no pullback (RSI(2) {r:.0f}, today {day:+.1%})"
+                   if r is not None else "no pullback")
+
+
+def rank_momentum() -> tuple[list[tuple[str, float]], dict[str, list[float]]]:
+    """FULL ranking by trailing 12-1 month return (best first), plus the close
+    series per symbol so callers can evaluate pullback timing."""
     import yfinance as yf
     df = yf.download(UNIVERSE, period="2y", interval="1d",
                      group_by="ticker", progress=False, threads=True)
-    scored = []
+    scored, closes = [], {}
     for s in UNIVERSE:
         try:
-            c = df[s]["Close"].dropna().tolist()
+            c = [float(x) for x in df[s]["Close"].dropna().tolist()]
             if len(c) < 260:
                 continue
             # 12-1 momentum: price 21 trading days ago vs ~252 days ago
-            mom = c[-21] / c[-252] - 1
-            scored.append((s, mom))
+            scored.append((s, c[-21] / c[-252] - 1))
+            closes[s] = c
         except Exception:
             continue
     scored.sort(key=lambda kv: -kv[1])
-    return scored
+    return scored, closes
 
 
 STATE = os.path.join(PRIVATE, "momentum_state.json")
@@ -116,16 +160,19 @@ def _record(order, status, real, extra=""):
 
 
 def rebalance(execute: bool) -> None:
-    ranking = rank_momentum()
+    ranking, closes = rank_momentum()
     top = ranking[:TOP_N]
     target = {s for s, _ in top}
     rank_of = {s: i + 1 for i, (s, _) in enumerate(ranking)}
     excluded = _excluded()
 
-    print(f"Momentum 12-1 target top-{TOP_N} (as of {date.today()}), "
-          f"sell below rank {SELL_RANK}:")
+    mode = "Mom%d-Pullback" % TOP_N if PULLBACK else "Mom%d" % TOP_N
+    print(f"{mode} — target top-{TOP_N} by 12-1 momentum (as of {date.today()}), "
+          f"sell past rank {SELL_RANK}:")
     for s, mom in top:
-        print(f"  {s:<6} {mom:+.1%} trailing 12-1")
+        ok, why = pullback_ready(closes.get(s, []))
+        mark = "ENTRY OK" if ok else "wait"
+        print(f"  {s:<6} {mom:+7.1%} trailing 12-1   [{mark}: {why}]")
     if target & excluded:
         skip = target & excluded
         print(f"  (note: {', '.join(sorted(skip))} also held by clone/DCA — "
@@ -151,14 +198,25 @@ def rebalance(execute: bool) -> None:
     # Hysteresis: sell only once a name has fallen PAST SELL_RANK (or vanished
     # from the ranking), not merely out of the top-N. Prevents intraday churn.
     to_sell = sorted(s for s in momentum_held if rank_of.get(s, 10**6) > SELL_RANK)
-    to_buy = sorted(target - set(held) - excluded)  # new names not held
+    # Entry timing: a target name is only bought while it is dipping. Names
+    # that are not dipping stay on the list and get bought on a later run —
+    # which is exactly what the 4x/day schedule is for.
+    candidates = sorted(target - set(held) - excluded)
+    to_buy, waiting = [], []
+    for s in candidates:
+        ok, why = pullback_ready(closes.get(s, []))
+        (to_buy if ok else waiting).append((s, why))
+    to_buy = [s for s, _ in to_buy]
 
     # Record what momentum owns/wants so the dip-scanner's exit engine skips it.
     _save_state(sorted((momentum_held | target) - excluded))
 
     print(f"\nRebalance plan:")
     print(f"  SELL (fell past rank {SELL_RANK}): {to_sell or 'none'}")
-    print(f"  BUY  (new top-{TOP_N}): {to_buy or 'none'}")
+    print(f"  BUY  (dipping now): {to_buy or 'none'}")
+    if waiting:
+        print(f"  WAIT (in target, no pullback yet): "
+              + ", ".join(f"{s} ({w})" for s, w in waiting))
     print(f"  HELD (still top-{TOP_N}): {sorted(momentum_held & target) or 'none'}")
 
     if not execute:
@@ -191,7 +249,7 @@ def rebalance(execute: bool) -> None:
 
     # BUYS via the shared gate chain (daily cap, dedupe, rejection halt)
     from .add_tickets import add as add_ticket
-    dollars = float(os.environ.get("MOMENTUM_DOLLARS", "200"))
+    dollars = float(os.environ.get("MOMENTUM_DOLLARS", "600"))
     for sym in to_buy:
         try:
             add_ticket([sym], dollars, f"momentum 12-1 rebalance {today}")
