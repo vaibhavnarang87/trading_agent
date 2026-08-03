@@ -208,12 +208,34 @@ def rebalance(execute: bool) -> None:
         (to_buy if ok else waiting).append((s, why))
     to_buy = [s for s, _ in to_buy]
 
+    # TOP-UP: the backtest assumes EQUAL weights. Legacy positions may be
+    # undersized vs the current target size, which under-weights exactly the
+    # names the strategy likes most. Top up an undersized target holding, but
+    # only on a pullback — same discipline as a fresh entry, never chasing.
+    dollars_target = float(os.environ.get("MOMENTUM_DOLLARS", "600"))
+    to_topup = []
+    for s in sorted(target - excluded):
+        if s not in held or s in to_buy:
+            continue
+        px_now = closes.get(s, [0])[-1]
+        value = held[s][0] * px_now
+        if value >= dollars_target * 0.7:      # close enough to target weight
+            continue
+        ok, why = pullback_ready(closes.get(s, []))
+        if ok:
+            to_topup.append((s, round(dollars_target - value, 2)))
+        else:
+            waiting.append((s, f"undersized ${value:.0f}, {why}"))
+
     # Record what momentum owns/wants so the dip-scanner's exit engine skips it.
     _save_state(sorted((momentum_held | target) - excluded))
 
     print(f"\nRebalance plan:")
     print(f"  SELL (fell past rank {SELL_RANK}): {to_sell or 'none'}")
     print(f"  BUY  (dipping now): {to_buy or 'none'}")
+    if to_topup:
+        print(f"  TOP-UP (undersized + dipping): "
+              + ", ".join(f"{s} +${d:.0f}" for s, d in to_topup))
     if waiting:
         print(f"  WAIT (in target, no pullback yet): "
               + ", ".join(f"{s} ({w})" for s, w in waiting))
@@ -250,6 +272,12 @@ def rebalance(execute: bool) -> None:
     # BUYS via the shared gate chain (daily cap, dedupe, rejection halt)
     from .add_tickets import add as add_ticket
     dollars = float(os.environ.get("MOMENTUM_DOLLARS", "600"))
+    for sym, amount in to_topup:
+        try:
+            add_ticket([sym], amount, f"momentum top-up to equal weight {today}")
+        except SystemExit:
+            pass
+        print(f"  TOP-UP {sym} +${amount:.0f} -> {sc._auto_execute(sym)}")
     for sym in to_buy:
         try:
             add_ticket([sym], dollars, f"momentum 12-1 rebalance {today}")
