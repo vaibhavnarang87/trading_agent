@@ -96,9 +96,43 @@ def pullback_ready(closes: list[float]) -> tuple[bool, str]:
                    if r is not None else "no pullback")
 
 
+RANK_CACHE = os.path.join(PRIVATE, "momentum_rank_cache.json")
+RANK_TTL = int(os.environ.get("MOMENTUM_RANK_TTL", "3600"))   # seconds
+
+
+def _cached_ranking():
+    """Reuse a recent ranking. 12-1 momentum is computed from DAILY closes, so
+    it cannot change intraday — re-downloading 2y x 40 symbols every run just
+    burns yfinance rate limit and risks getting the bot throttled."""
+    try:
+        c = json.load(open(RANK_CACHE))
+        age = (datetime.now(timezone.utc)
+               - datetime.fromisoformat(c["ts"])).total_seconds()
+        if age < RANK_TTL:
+            return [(s, m) for s, m in c["scored"]], c["closes"], age
+    except Exception:
+        pass
+    return None, None, None
+
+
+def _save_ranking(scored, closes) -> None:
+    os.makedirs(PRIVATE, exist_ok=True)
+    json.dump({"ts": datetime.now(timezone.utc).isoformat(),
+               "scored": [[s, m] for s, m in scored],
+               # keep only the tail each caller needs (last close, prev, RSI window)
+               "closes": {s: c[-30:] for s, c in closes.items()}},
+              open(RANK_CACHE, "w"))
+
+
 def rank_momentum() -> tuple[list[tuple[str, float]], dict[str, list[float]]]:
     """FULL ranking by trailing 12-1 month return (best first), plus the close
-    series per symbol so callers can evaluate pullback timing."""
+    series per symbol so callers can evaluate pullback timing. Cached for
+    RANK_TTL seconds so high-frequency schedules stay rate-limit safe."""
+    scored, closes, age = _cached_ranking()
+    if scored is not None:
+        print(f"  (using cached ranking, {age/60:.0f} min old — "
+              f"12-1 momentum only changes on daily closes)")
+        return scored, closes
     import yfinance as yf
     df = yf.download(UNIVERSE, period="2y", interval="1d",
                      group_by="ticker", progress=False, threads=True)
@@ -114,6 +148,7 @@ def rank_momentum() -> tuple[list[tuple[str, float]], dict[str, list[float]]]:
         except Exception:
             continue
     scored.sort(key=lambda kv: -kv[1])
+    _save_ranking(scored, closes)
     return scored, closes
 
 
