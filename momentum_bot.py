@@ -309,7 +309,10 @@ def rebalance(execute: bool) -> None:
     dollars = float(os.environ.get("MOMENTUM_DOLLARS", "600"))
     for sym, amount in to_topup:
         try:
-            add_ticket([sym], amount, f"momentum top-up to equal weight {today}")
+            # allow_existing: a top-up is a deliberate add-to-position and
+            # needs its own ticket/ref_id, or dedupe rejects it as already done.
+            add_ticket([sym], amount, f"momentum top-up to equal weight {today}",
+                       allow_existing=True)
         except SystemExit:
             pass
         print(f"  TOP-UP {sym} +${amount:.0f} -> {sc._auto_execute(sym)}")

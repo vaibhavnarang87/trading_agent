@@ -40,7 +40,13 @@ def _latest_plan_path() -> str | None:
     return files[-1] if files else None
 
 
-def add(symbols: list[str], dollars: float, reason: str) -> None:
+def add(symbols: list[str], dollars: float, reason: str,
+        allow_existing: bool = False) -> None:
+    """Build governor-checked tickets. By default a symbol already in the plan
+    is skipped (no accidental double-buys). Pass allow_existing=True for
+    deliberate ADD-TO-POSITION orders (e.g. topping a holding up to its target
+    weight) — those need a fresh ticket/ref_id or the executor's dedupe will
+    see the original ticket and refuse as 'already executed'."""
     path = _latest_plan_path()
     if not path:
         raise SystemExit("No plan on disk yet — run: python -m trading_agent.briefing_daily")
@@ -50,7 +56,7 @@ def add(symbols: list[str], dollars: float, reason: str) -> None:
     candidates = []
     for sym in symbols:
         sym = sym.upper().strip()
-        if sym in existing:
+        if sym in existing and not allow_existing:
             print(f"  {sym}: already in plan, skipping")
             continue
         px = _price(sym)
