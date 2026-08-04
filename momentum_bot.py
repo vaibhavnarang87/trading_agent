@@ -173,11 +173,17 @@ def _save_state(symbols: list[str]) -> None:
 
 
 def _excluded() -> set[str]:
-    """Symbols momentum must NOT touch: Berkshire clone + DCA target."""
+    """Symbols momentum must NOT touch — owned by another strategy with its
+    own exit rule (clone: Berkshire filings; RSI2: its own signal; DCA)."""
     ex = {DCA_SYMBOL}
     try:
         from .berkshire_clone import clone_symbols
         ex |= clone_symbols()
+    except Exception:
+        pass
+    try:
+        from .rsi2_bot import rsi2_symbols
+        ex |= rsi2_symbols()
     except Exception:
         pass
     return ex

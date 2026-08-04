@@ -297,6 +297,11 @@ def check_exits() -> None:
         cloned |= momentum_symbols()   # exits on momentum rank, not a stop
     except Exception:
         pass
+    try:
+        from .rsi2_bot import rsi2_symbols
+        cloned |= rsi2_symbols()       # exits on RSI(2)/time/stop of its own
+    except Exception:
+        pass
     for pos in positions or []:
         try:
             qty = float(pos.get("quantity") or 0)
