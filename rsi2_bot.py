@@ -232,7 +232,11 @@ def rebalance(execute: bool) -> None:
             _rec(order, "rejected", False, str(e))
             print(f"  SELL {sym} rejected: {e}")
 
-    # buys through the shared gate chain
+    # buys through the shared gate chain (skipped entirely in sloth mode)
+    from .mode import buys_paused
+    if buys_paused() and to_buy:
+        print("  BUYS PAUSED (sloth mode) — entries skipped, exits done above.")
+        to_buy = []
     for r in to_buy:
         sym = r["symbol"]
         try:

@@ -312,6 +312,10 @@ def rebalance(execute: bool) -> None:
 
     # BUYS via the shared gate chain (daily cap, dedupe, rejection halt)
     from .add_tickets import add as add_ticket
+    from .mode import buys_paused
+    if buys_paused():
+        print("  BUYS PAUSED (sloth mode) — sells above still executed.")
+        return
     dollars = float(os.environ.get("MOMENTUM_DOLLARS", "600"))
     for sym, amount in to_topup:
         try:
