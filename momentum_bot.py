@@ -368,8 +368,15 @@ def rebalance(execute: bool) -> None:
                     _record(order, "rejected", False, str(e))
                     print(f"    SELL {sym} rejected: {e}")
             if raised:
-                print(f"  raised ~${raised:.0f}; proceeds settle T+1 — the buys "
-                      f"below will fill on tomorrow's runs, not today.")
+                # Attempt the buys immediately below. Whether the freed cash is
+                # usable right now is the BROKER's call, not an assumption we
+                # make here: Robinhood may release proceeds instantly, or hold
+                # them until T+1 settlement on a cash account. If it rejects for
+                # insufficient funds, the next scheduled run retries — no order
+                # is lost either way.
+                print(f"  raised ~${raised:.0f} — attempting the buys now; "
+                      f"if the proceeds are still unsettled the broker will "
+                      f"reject and the next run retries.")
     for sym, amount in to_topup:
         try:
             # allow_existing: a top-up is a deliberate add-to-position and
