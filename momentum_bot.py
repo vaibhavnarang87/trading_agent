@@ -153,6 +153,17 @@ def rank_momentum() -> tuple[list[tuple[str, float]], dict[str, list[float]]]:
 
 
 STATE = os.path.join(PRIVATE, "momentum_state.json")
+# Capital recycling: fund new buys by selling the weakest holdings rather than
+# leaving signals unfilled for want of cash. Off => unfilled buys just wait.
+RECYCLE = os.environ.get("MOMENTUM_RECYCLE", "1") == "1"
+
+
+def _buying_power(ex) -> float:
+    try:
+        p = ex.rh.profiles.load_account_profile(account_number=ACCOUNT)
+        return float(p.get("buying_power") or 0)
+    except Exception:
+        return 0.0
 
 
 def momentum_symbols() -> set[str]:
@@ -317,6 +328,48 @@ def rebalance(execute: bool) -> None:
         print("  BUYS PAUSED (sloth mode) — sells above still executed.")
         return
     dollars = float(os.environ.get("MOMENTUM_DOLLARS", "600"))
+
+    # ---- CAPITAL RECYCLING ----
+    # Fully invested? Fund new buys by selling the WEAKEST holdings instead of
+    # waiting for new money. Only sells names ranked worse than the target set,
+    # never a name we're trying to buy, never a same-day purchase (PDT-safe).
+    # NOTE: this is a CASH account — proceeds settle T+1, so the freed cash
+    # buys on a LATER run, not this one. Sell today, deploy tomorrow.
+    if RECYCLE and (to_buy or to_topup):
+        needed = sum(a for _, a in to_topup) + len(to_buy) * dollars
+        bp = _buying_power(ex)
+        if needed > bp:
+            shortfall = needed - bp
+            print(f"\n  RECYCLE: need ${needed:.0f}, have ${bp:.0f} "
+                  f"-> raising ${shortfall:.0f} by trimming the weakest holdings")
+            weakest = sorted(
+                ((rank_of.get(s, 10**6), s) for s in momentum_held
+                 if s not in target and s not in to_buy),
+                reverse=True)          # worst-ranked first
+            raised = 0.0
+            for rank, sym in weakest:
+                if raised >= shortfall:
+                    break
+                qty, created = held[sym]
+                if created and (today - date.fromisoformat(created)).days < 1:
+                    print(f"    {sym}: skip (bought today, PDT-safe)")
+                    continue
+                value = qty * closes.get(sym, [0])[-1]
+                order = Order(account_number=ACCOUNT, symbol=sym, side=Side.SELL,
+                              type=OrderType.MARKET, quantity=round(qty, 6))
+                try:
+                    r = ex.place(order)
+                    _record(order, r.get("status"), r.get("real_money", False),
+                            f"recycle: rank {rank}, freeing ${value:.0f}")
+                    raised += value
+                    print(f"    SOLD {sym} (rank {rank}, ~${value:.0f}) "
+                          f"-> {r.get('status')}")
+                except Exception as e:
+                    _record(order, "rejected", False, str(e))
+                    print(f"    SELL {sym} rejected: {e}")
+            if raised:
+                print(f"  raised ~${raised:.0f}; proceeds settle T+1 — the buys "
+                      f"below will fill on tomorrow's runs, not today.")
     for sym, amount in to_topup:
         try:
             # allow_existing: a top-up is a deliberate add-to-position and
