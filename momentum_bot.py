@@ -340,12 +340,19 @@ def rebalance(execute: bool) -> None:
         bp = _buying_power(ex)
         if needed > bp:
             shortfall = needed - bp
-            print(f"\n  RECYCLE: need ${needed:.0f}, have ${bp:.0f} "
-                  f"-> raising ${shortfall:.0f} by trimming the weakest holdings")
             weakest = sorted(
                 ((rank_of.get(s, 10**6), s) for s in momentum_held
                  if s not in target and s not in to_buy),
                 reverse=True)          # worst-ranked first
+            if not weakest:
+                # Every holding is still a target name — there is nothing weak
+                # to trim. Say so rather than announcing a raise that can't happen.
+                print(f"\n  RECYCLE: short ${shortfall:.0f}, but every holding is "
+                      f"still in the top {TOP_N} — nothing weaker to sell. "
+                      f"Buys wait for cash.")
+            else:
+                print(f"\n  RECYCLE: need ${needed:.0f}, have ${bp:.0f} "
+                      f"-> raising ${shortfall:.0f} by trimming the weakest holdings")
             raised = 0.0
             for rank, sym in weakest:
                 if raised >= shortfall:
