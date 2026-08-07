@@ -213,10 +213,15 @@ def _record(order, status, real, extra=""):
 
 def rebalance(execute: bool) -> None:
     ranking, closes = rank_momentum()
-    top = ranking[:TOP_N]
-    target = {s for s, _ in top}
     rank_of = {s: i + 1 for i, (s, _) in enumerate(ranking)}
     excluded = _excluded()
+    # Target the top-N momentum names this sleeve can ACTUALLY own. Names owned
+    # by another strategy (e.g. GOOGL held by the clone) are skipped and the
+    # next-ranked eligible name takes the slot — otherwise those slots can never
+    # be filled and their capital sits idle forever.
+    eligible = [(s, m) for s, m in ranking if s not in excluded]
+    top = eligible[:TOP_N]
+    target = {s for s, _ in top}
 
     mode = "Mom%d-Pullback" % TOP_N if PULLBACK else "Mom%d" % TOP_N
     print(f"{mode} — target top-{TOP_N} by 12-1 momentum (as of {date.today()}), "
