@@ -259,6 +259,13 @@ def rebalance(execute: bool) -> None:
 
 
 def main() -> None:
+    # Market-hours guard lives here, not in the plist — see momentum_bot.main.
+    if "--rebalance" in sys.argv and "--force" not in sys.argv:
+        from .dca_bot import market_open
+        if not market_open():
+            print(f"[{datetime.now(timezone.utc).isoformat(timespec='seconds')}] "
+                  f"market closed — no action")
+            return
     rebalance(execute="--rebalance" in sys.argv)
 
 

@@ -400,7 +400,13 @@ def rebalance(execute: bool) -> None:
         print(f"  TOP-UP {sym} +${amount:.0f} -> {sc._auto_execute(sym)}")
     for sym in to_buy:
         try:
-            add_ticket([sym], dollars, f"momentum 12-1 rebalance {today}")
+            # allow_existing: a name can legitimately be re-bought after being
+            # sold (LLY: bought 7/27, sold 8/5, re-entered top-5 8/7). Without
+            # this the stale ticket is reused and the executor rejects it as
+            # 'already executed' — silently making every past holding
+            # permanently un-buyable.
+            add_ticket([sym], dollars, f"momentum 12-1 rebalance {today}",
+                       allow_existing=True)
         except SystemExit:
             pass
         outcome = sc._auto_execute(sym)
@@ -411,6 +417,15 @@ def rebalance(execute: bool) -> None:
 
 
 def main() -> None:
+    # Scheduling is a plain interval timer (StartInterval), which launchd fires
+    # reliably across sleep/wake. Large StartCalendarInterval arrays silently
+    # stopped firing, so market hours are enforced HERE instead of in the plist.
+    if "--rebalance" in sys.argv and "--force" not in sys.argv:
+        from .dca_bot import market_open
+        if not market_open():
+            print(f"[{datetime.now(timezone.utc).isoformat(timespec='seconds')}] "
+                  f"market closed — no action")
+            return
     rebalance(execute="--rebalance" in sys.argv)
 
 
