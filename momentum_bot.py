@@ -213,6 +213,16 @@ def _record(order, status, real, extra=""):
 
 def rebalance(execute: bool) -> None:
     ranking, closes = rank_momentum()
+    # SAFETY: a failed/partial data fetch must NEVER be read as "every holding
+    # collapsed". On 2026-08-11 an empty ranking made rank_of.get(s, 10**6)
+    # exceed SELL_RANK for every position and the bot liquidated the entire
+    # sleeve (7 positions) on missing data rather than on any signal.
+    MIN_RANKED = max(20, TOP_N * 4)
+    if len(ranking) < MIN_RANKED:
+        print(f"ABORT: ranking returned only {len(ranking)} names "
+              f"(need >= {MIN_RANKED}). Data fetch looks broken — taking no "
+              f"action. Positions are held, nothing sold.")
+        return
     rank_of = {s: i + 1 for i, (s, _) in enumerate(ranking)}
     excluded = _excluded()
     # Target the top-N momentum names this sleeve can ACTUALLY own. Names owned

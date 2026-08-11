@@ -139,6 +139,33 @@ class RobinhoodExecutor(OrderExecutor):
                 "broker_state": state, "broker_response": resp}
 
 
+def all_positions(rh, account_number: str) -> list[dict]:
+    """ALL non-zero positions for one account, following pagination.
+
+    robin_stocks' get_open_stock_positions(account_number=...) silently returns
+    only the FIRST PAGE — 10 of 18 positions here — while the no-argument form
+    returns a different account entirely (the default/margin one). Both are
+    wrong for us: the truncated view hid momentum and RSI2 holdings from the
+    exit engine, so no stop-loss or exit rule could fire on them.
+
+    This walks every page of /positions/ for the requested account.
+    """
+    out: list[dict] = []
+    url = (f"https://api.robinhood.com/positions/"
+           f"?account_number={account_number}&nonzero=true")
+    seen = set()
+    while url and url not in seen:
+        seen.add(url)
+        data = rh.helper.request_get(url, "regular")
+        if not isinstance(data, dict):
+            break
+        for p in data.get("results") or []:
+            if float(p.get("quantity") or 0) > 0:
+                out.append(p)
+        url = data.get("next")
+    return out
+
+
 def get_executor() -> tuple[OrderExecutor, str]:
     """Executor + human-readable label, chosen by TRADING_EXECUTOR env var.
     Default is paper: simulated fills, no credentials, no real money."""
