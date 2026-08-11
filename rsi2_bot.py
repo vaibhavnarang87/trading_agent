@@ -150,6 +150,22 @@ def rebalance(execute: bool) -> None:
 
     by_sym = {r["symbol"]: r for r in rows}
 
+    # Actual sellable share counts from the broker. The quantity recorded at
+    # buy time is an ESTIMATE ($ / price) and is routinely a hair larger than
+    # what actually filled (XOM: stored 1.960600 vs held 1.96), which makes
+    # every exit reject with "Not enough shares to sell". Always sell what the
+    # account really holds.
+    actual_qty: dict[str, float] = {}
+    try:
+        from .live_executor import RobinhoodExecutor
+        _ex = RobinhoodExecutor()
+        for p in _ex.rh.account.get_open_stock_positions(account_number=ACCOUNT) or []:
+            q = float(p.get("shares_available_for_sells") or 0)
+            if q > 0:
+                actual_qty[_ex.rh.stocks.get_symbol_by_url(p["instrument"])] = q
+    except Exception as e:
+        print(f"  (could not read live share counts: {e})")
+
     # ---- exits ----
     to_sell = []
     for sym, info in list(positions.items()):
@@ -166,7 +182,10 @@ def rebalance(execute: bool) -> None:
         elif pnl <= STOP_LOSS:
             why = f"stop {pnl:.1%}"
         if why:
-            to_sell.append((sym, info["quantity"], why, pnl, held_days))
+            qty = actual_qty.get(sym, info["quantity"])
+            if sym not in actual_qty:
+                print(f"  {sym}: no live share count; using stored estimate")
+            to_sell.append((sym, qty, why, pnl, held_days))
 
     # ---- entries ----
     slots = MAX_POS - (len(positions) - len(to_sell))
