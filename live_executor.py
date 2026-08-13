@@ -166,6 +166,31 @@ def all_positions(rh, account_number: str) -> list[dict]:
     return out
 
 
+def all_orders(rh, account_number: str, since: str = "") -> list[dict]:
+    """All orders for one account, following pagination. robin_stocks'
+    find_stock_orders() resolves one symbol at a time and misses most history,
+    which made the reconciliation report 1 broker fill against 30 local ones."""
+    out: list[dict] = []
+    url = f"https://api.robinhood.com/orders/?account_number={account_number}"
+    seen = set()
+    while url and url not in seen:
+        seen.add(url)
+        data = rh.helper.request_get(url, "regular")
+        if not isinstance(data, dict):
+            break
+        stop = False
+        for o in data.get("results") or []:
+            ts = (o.get("last_transaction_at") or o.get("created_at") or "")[:10]
+            if since and ts and ts < since:
+                stop = True          # results are newest-first
+                continue
+            out.append(o)
+        if stop:
+            break
+        url = data.get("next")
+    return out
+
+
 def get_executor() -> tuple[OrderExecutor, str]:
     """Executor + human-readable label, chosen by TRADING_EXECUTOR env var.
     Default is paper: simulated fills, no credentials, no real money."""

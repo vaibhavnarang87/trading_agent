@@ -121,16 +121,9 @@ def run() -> None:
                 e = json.loads(line)
                 if e["ts"][:10] >= since and e.get("result_status") not in ("rejected", None):
                     led.append(e)
-    filled = 0
-    for sym in set(broker) | {e.get("symbol", "") for e in led}:
-        if not sym:
-            continue
-        try:
-            for o in rh.orders.find_stock_orders(symbol=sym) or []:
-                if o.get("state") == "filled" and (o.get("last_transaction_at") or "")[:10] >= since:
-                    filled += 1
-        except Exception:
-            continue
+    from .live_executor import all_orders
+    filled = sum(1 for o in all_orders(rh, ACCOUNT, since)
+                 if o.get("state") == "filled")
     print(f"\nORDER LEDGER (last 14 days)")
     print(f"  local ledger says filled : {len(led)}")
     print(f"  broker says filled       : {filled}")

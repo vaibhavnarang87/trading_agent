@@ -264,7 +264,16 @@ def rebalance(execute: bool) -> None:
     momentum_held = {s for s in held if s not in excluded}
     # Hysteresis: sell only once a name has fallen PAST SELL_RANK (or vanished
     # from the ranking), not merely out of the top-N. Prevents intraday churn.
-    to_sell = sorted(s for s in momentum_held if rank_of.get(s, 10**6) > SELL_RANK)
+    # SAFETY: only sell a holding whose rank we actually MEASURED. A symbol
+    # missing from the ranking means "no data for it", not "it collapsed" —
+    # treating absence as a sell is what liquidated the sleeve on 2026-08-11.
+    # The MIN_RANKED floor catches a total outage; this catches a partial one.
+    unranked = sorted(s for s in momentum_held if s not in rank_of)
+    if unranked:
+        print(f"  NOTE: no ranking data for {unranked} — holding them "
+              f"(absence of data is not a sell signal)")
+    to_sell = sorted(s for s in momentum_held
+                     if s in rank_of and rank_of[s] > SELL_RANK)
     # Entry timing: a target name is only bought while it is dipping. Names
     # that are not dipping stay on the list and get bought on a later run —
     # which is exactly what the 4x/day schedule is for.
