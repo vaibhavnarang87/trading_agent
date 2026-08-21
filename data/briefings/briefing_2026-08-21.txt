@@ -1,0 +1,43 @@
+############################################################
+DAILY BRIEFING — 2026-08-21   (information, not advice)
+############################################################
+
+STRATEGY SIGNAL (SPY intraday momentum, paper):
+  SPY 2026-08-21: first30 +0.251% -> LONG (euphoria=False)
+
+WATCHLIST (ranked by what's notable today):
+------------------------------------------------------------
+NKE    $40.76      4% of range  [near 52w LOW]
+        beat rate 100%
+AAPL   $309.35     73% of range
+        beat rate 100%
+AMZN   $258.63     70% of range
+        beat rate 86%
+MSFT   $483.24     range n/a
+        beat rate 100%
+GOOGL  $344.82     71% of range
+        beat rate 100%
+TSLA   $362.86     34% of range
+------------------------------------------------------------
+Reminder: crowd spikes are a RISK flag, not a buy signal. Earnings
+dates mean volatility, not direction. You decide and place trades.
+############################################################
+
+SCREEN — quality-dip candidates flagged for review (research, not advice):
+------------------------------------------------------------
+NKE    $40.76      beaten down (4% of 52w range <= 30%); quality earnings (beat rate 100% >= 75%)
+------------------------------------------------------------
+A screen hit is a prompt to do your own research, not a recommendation
+to buy. Criteria are fixed and shown above; you decide and place trades.
+
+UNIVERSE SCAN — quality dips beyond the watchlist (research, not advice):
+------------------------------------------------------------
+IBM    $235.68     beaten down (26% of 52w range <= 30%); quality earnings (beat rate 75% >= 75%); outside watchlist (universe scan)
+INTU   $367.00     beaten down (26% of 52w range <= 30%); quality earnings (beat rate 100% >= 75%); outside watchlist (universe scan)
+ISRG   $378.81     beaten down (18% of 52w range <= 30%); quality earnings (beat rate 100% >= 75%); outside watchlist (universe scan)
+LOW    $216.09     beaten down (17% of 52w range <= 30%); quality earnings (beat rate 100% >= 75%); outside watchlist (universe scan)
+MCD    $270.95     beaten down (11% of 52w range <= 30%); quality earnings (beat rate 75% >= 75%); outside watchlist (universe scan)
+------------------------------------------------------------
+Scanned ~102 large caps with fixed, shown criteria. A hit
+is a research prompt, not a recommendation. You decide and place trades.
+############################################################
