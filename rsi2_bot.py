@@ -105,20 +105,13 @@ def _excluded() -> set[str]:
 
 def scan() -> tuple[list[dict], dict[str, list[float]]]:
     """Evaluate the universe. Returns (candidate rows, closes)."""
-    import yfinance as yf
-    from .momentum_bot import UNIVERSE
-    df = yf.download(UNIVERSE, period="2y", interval="1d",
-                     group_by="ticker", progress=False, threads=True)
-    closes, momo = {}, []
-    for s in UNIVERSE:
-        try:
-            c = [float(x) for x in df[s]["Close"].dropna().tolist()]
-            if len(c) < 260:
-                continue
-            closes[s] = c
-            momo.append((c[-21] / c[-252] - 1, s))
-        except Exception:
-            continue
+    # Reuse momentum's CACHED ranking instead of re-downloading 40 symbols x 2y
+    # on every run. Two bots each pulling that on a 30-minute schedule got the
+    # account rate-limited by Yahoo (HTTP 429), which made yfinance retry/back
+    # off and hang the run rather than fail fast.
+    from .momentum_bot import rank_momentum
+    scored, closes = rank_momentum()
+    momo = [(m, s) for s, m in scored]
     momo.sort(reverse=True)
     top = {s for _, s in momo[:MOMO_TOP]}
 
