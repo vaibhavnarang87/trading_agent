@@ -51,9 +51,41 @@ class RobinhoodExecutor(OrderExecutor):
                 "The password is stored in your macOS Keychain, not in plaintext."
             )
         self.rh = rh
-        # Interactive: robin_stocks prompts for MFA in the terminal — that
-        # prompt is you, personally, authorizing this session.
-        self.rh.login(user, pwd)
+        # robin_stocks 3.4.0 bug: if the post-approval login reply lacks
+        # 'token_type', it has ALREADY opened the session pickle for writing,
+        # so the crash truncates the saved token to 0 bytes. Every failed
+        # attempt then forces a fresh device approval on the user's phone.
+        # Back the token up and restore it on failure, and record the reply's
+        # KEYS (never values) so the incompatibility can be diagnosed.
+        import shutil
+        import robin_stocks.robinhood.authentication as _auth
+        pkl = os.path.expanduser("~/.tokens/robinhood.pickle")
+        bak = pkl + ".bak"
+        if os.path.exists(pkl) and os.path.getsize(pkl) > 0:
+            shutil.copy2(pkl, bak)
+        _orig_post = _auth.request_post
+
+        def _logged_post(url, payload=None, *a, **kw):
+            r = _orig_post(url, payload, *a, **kw)
+            if "oauth2/token" in str(url):
+                keys = sorted(r) if isinstance(r, dict) else type(r).__name__
+                with open(os.path.join(os.path.dirname(__file__), "data",
+                                       "private", "login_debug.log"), "a") as f:
+                    from datetime import datetime as _dt
+                    f.write(f"{_dt.now().isoformat(timespec='seconds')} "
+                            f"token reply keys: {keys}\n")
+            return r
+
+        _auth.request_post = _logged_post
+        try:
+            # Interactive: robin_stocks prompts for MFA in the terminal — that
+            # prompt is you, personally, authorizing this session.
+            self.rh.login(user, pwd)
+        finally:
+            _auth.request_post = _orig_post
+            if (os.path.exists(bak) and
+                    (not os.path.exists(pkl) or os.path.getsize(pkl) == 0)):
+                shutil.copy2(bak, pkl)
         # robin_stocks can FAIL login without raising (expired token + headless
         # challenge). Verify, or an "armed" bot would silently bounce every
         # order. Raise -> callers label auto-exec disabled and notify.
