@@ -69,6 +69,11 @@ class RobinhoodExecutor(OrderExecutor):
             r = _orig_post(url, payload, *a, **kw)
             if "oauth2/token" in str(url):
                 keys = sorted(r) if isinstance(r, dict) else type(r).__name__
+                # When the reply carries no token, Robinhood puts the reason in
+                # 'detail'. That is an error string, never a credential, and it
+                # is the only thing that says WHY the login is being refused.
+                if isinstance(r, dict) and "access_token" not in r and r.get("detail"):
+                    keys = f"{keys}  detail={r['detail']!r}"
                 with open(os.path.join(os.path.dirname(__file__), "data",
                                        "private", "login_debug.log"), "a") as f:
                     from datetime import datetime as _dt

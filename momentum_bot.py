@@ -25,7 +25,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from datetime import date, datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 
 from .env_file import load_env_file
 
@@ -162,6 +162,23 @@ RECYCLE = os.environ.get("MOMENTUM_RECYCLE", "1") == "1"
 # -10% gives the same drawdown protection with ~3 more points of CAGR and
 # 33 stop events instead of 57. Set MOMENTUM_STOP_PCT=0 to disable.
 STOP_PCT = float(os.environ.get("MOMENTUM_STOP_PCT", "7")) / 100
+# How long a stopped-out name stays un-buyable. Blocking it until it left the
+# top-N (the original rule) HALVED returns for no risk benefit — 8y Mom5:
+# +17.3% CAGR/-29% DD vs +34.5%/-29% for a 5-day cooldown, Sharpe 0.81 vs 1.14.
+# A short cooldown still prevents same-week churn (settlement + wash sales on a
+# cash account) without stranding the slot. 0 = re-buy at the next rebalance.
+STOP_COOLDOWN_DAYS = int(os.environ.get("MOMENTUM_STOP_COOLDOWN_DAYS", "5"))
+
+
+def _business_days(a: date, b: date) -> int:
+    """Trading days between two dates (weekends only; holidays ignored)."""
+    step = 1 if b >= a else -1
+    d, n = a, 0
+    while d != b:
+        d += timedelta(days=step)
+        if d.weekday() < 5:
+            n += step
+    return abs(n)
 
 
 def _buying_power(ex) -> float:
@@ -189,11 +206,14 @@ def _load_state() -> dict:
         return {}
 
 
-def _save_state(symbols: list[str], stopped: list[str] | None = None) -> None:
+def _save_state(symbols: list[str], stopped: dict | None = None) -> None:
     os.makedirs(PRIVATE, exist_ok=True)
     prev = _load_state()
+    keep = prev.get("stopped", {}) if stopped is None else stopped
+    if isinstance(keep, list):
+        keep = {s: "" for s in keep}
     json.dump({"symbols": sorted(symbols),
-               "stopped": sorted(prev.get("stopped", []) if stopped is None else stopped),
+               "stopped": keep,
                "updated": datetime.now(timezone.utc).isoformat()},
               open(STATE, "w"), indent=2)
 
@@ -283,7 +303,9 @@ def rebalance(execute: bool) -> None:
     # Checked before the rank rules so a collapsing name exits on price, not on
     # a slow rank decay. Stopped names are blocked from re-entry until they
     # drop out of the target set, so the bot can't instantly rebuy them.
-    stopped_state = set(_load_state().get("stopped", []))
+    _raw_stopped = _load_state().get("stopped", [])
+    stopped_state = ({s: "" for s in _raw_stopped} if isinstance(_raw_stopped, list)
+                     else dict(_raw_stopped))
     stop_hits: list[tuple[str, float, float]] = []
     if STOP_PCT > 0:
         for s in sorted(momentum_held):
@@ -308,9 +330,23 @@ def rebalance(execute: bool) -> None:
     # Entry timing: a target name is only bought while it is dipping. Names
     # that are not dipping stay on the list and get bought on a later run —
     # which is exactly what the 4x/day schedule is for.
-    blocked = {s for s in stopped_state if s in target}
+    blocked = set()
+    for sym, when in stopped_state.items():
+        if not when:                      # legacy entry, no date -> release now
+            continue
+        try:
+            age = _business_days(date.fromisoformat(when), today)
+        except Exception:
+            continue
+        if age < STOP_COOLDOWN_DAYS:
+            blocked.add(sym)
     if blocked:
-        print(f"  BLOCKED (stopped out, still in target): {sorted(blocked)}")
+        print(f"  COOLING OFF (stopped out < {STOP_COOLDOWN_DAYS} trading days): "
+              + ", ".join(f"{s} ({_business_days(date.fromisoformat(stopped_state[s]), today)}d)"
+                          for s in sorted(blocked)))
+    released = {s for s in stopped_state if s not in blocked}
+    if released:
+        print(f"  ELIGIBLE AGAIN (cooldown served): {sorted(released)}")
     candidates = sorted(target - set(held) - excluded - blocked)
     to_buy, waiting = [], []
     for s in candidates:
@@ -368,7 +404,7 @@ def rebalance(execute: bool) -> None:
 
     # STOP-LOSS sells first — a price breach is more urgent than rank decay.
     today = date.today()
-    newly_stopped = set(stopped_state)
+    newly_stopped = dict(stopped_state)
     for sym, avg, last in stop_hits:
         q, created, _a = held[sym]
         if created and (today - date.fromisoformat(created)).days < 1:
@@ -380,16 +416,15 @@ def rebalance(execute: bool) -> None:
             r = ex.place(order)
             _record(order, r.get("status"), r.get("real_money", False),
                     f"stop-loss {last/avg-1:+.1%} (cost ${avg:.2f})")
-            newly_stopped.add(sym)
+            newly_stopped[sym] = today.isoformat()
             print(f"  STOPPED OUT {sym} at ${last:.2f} ({last/avg-1:+.1%}) "
                   f"-> {r.get('status')}")
         except Exception as e:
             _record(order, "rejected", False, str(e))
             print(f"  STOP sell {sym} rejected: {e}")
     # names no longer in target are eligible again
-    newly_stopped = {s for s in newly_stopped if s in target}
     _save_state(sorted((momentum_held | target) - excluded),
-                stopped=sorted(newly_stopped))
+                stopped=newly_stopped)
 
     # SELLS (uncapped) — free cash, exit dropped names
     for sym in to_sell:
