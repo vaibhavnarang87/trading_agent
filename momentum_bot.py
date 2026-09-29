@@ -297,7 +297,16 @@ def rebalance(execute: bool) -> None:
         held[sym] = (q, p.get("created_at", "")[:10],
                      float(p.get("average_buy_price") or 0))
 
-    momentum_held = {s for s in held if s not in excluded}
+    # Momentum manages ONLY names from its own universe. Without this it adopts
+    # any unclaimed position as its own — KHC, dropped by the Berkshire clone
+    # when it left Berkshire's 13F, was silently inherited and then sold by the
+    # recycle path on 2026-09-24 at a computed value of $0.
+    momentum_held = {s for s in held if s not in excluded and s in UNIVERSE}
+    orphans = sorted(s for s in held
+                     if s not in excluded and s not in UNIVERSE)
+    if orphans:
+        print(f"  ORPHANS (no strategy owns these; momentum will NOT touch "
+              f"them): {orphans}")
 
     # ---- STOP-LOSS: cut any holding trading STOP_PCT below its average cost.
     # Checked before the rank rules so a collapsing name exits on price, not on
@@ -461,9 +470,13 @@ def rebalance(execute: bool) -> None:
         bp = _buying_power(ex)
         if needed > bp:
             shortfall = needed - bp
+            # Only trim names whose rank we MEASURED and whose price we know.
+            # rank_of.get(s, 10**6) made any unranked name look like the worst
+            # holding in the book, so it was always sold first.
             weakest = sorted(
-                ((rank_of.get(s, 10**6), s) for s in momentum_held
-                 if s not in target and s not in to_buy),
+                ((rank_of[s], s) for s in momentum_held
+                 if s in rank_of and s not in target and s not in to_buy
+                 and closes.get(s)),
                 reverse=True)          # worst-ranked first
             if not weakest:
                 # Every holding is still a target name — there is nothing weak
@@ -482,7 +495,11 @@ def rebalance(execute: bool) -> None:
                 if created and (today - date.fromisoformat(created)).days < 1:
                     print(f"    {sym}: skip (bought today, PDT-safe)")
                     continue
-                value = qty * closes.get(sym, [0])[-1]
+                px_now = (closes.get(sym) or [0])[-1]
+                if px_now <= 0:
+                    print(f"    {sym}: skip (no price data — cannot value it)")
+                    continue
+                value = qty * px_now
                 order = Order(account_number=ACCOUNT, symbol=sym, side=Side.SELL,
                               type=OrderType.MARKET, quantity=round(qty, 6))
                 try:
