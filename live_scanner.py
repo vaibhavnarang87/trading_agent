@@ -277,7 +277,8 @@ def check_exits() -> None:
         return
     acct = os.environ.get("TRADING_ACCOUNT_NUMBER", "")
     try:
-        positions = executor.rh.account.get_open_stock_positions(account_number=acct)
+        from .live_executor import all_positions
+        positions = all_positions(executor.rh, acct)
     except Exception as e:
         print(f"  exits: could not fetch positions: {e}")
         return

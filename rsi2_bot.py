@@ -152,12 +152,27 @@ def rebalance(execute: bool) -> None:
     try:
         from .live_executor import RobinhoodExecutor
         _ex = RobinhoodExecutor()
-        for p in _ex.rh.account.get_open_stock_positions(account_number=ACCOUNT) or []:
+        from .live_executor import all_positions
+        for p in all_positions(_ex.rh, ACCOUNT):
             q = float(p.get("shares_available_for_sells") or 0)
             if q > 0:
                 actual_qty[_ex.rh.stocks.get_symbol_by_url(p["instrument"])] = q
     except Exception as e:
         print(f"  (could not read live share counts: {e})")
+
+    # Drop PHANTOM positions: names state thinks we hold but the broker does
+    # not. ABBV was bought and sold on 2026-09-25, state kept it, and every run
+    # since tried to sell shares that were not there (rejected each time).
+    # Only prune when the position read actually succeeded, so a broker outage
+    # never erases real positions.
+    if actual_qty:
+        phantom = [s for s in positions if s not in actual_qty]
+        for sym in phantom:
+            print(f"  {sym}: PHANTOM — state says held, broker does not. Dropping.")
+            positions.pop(sym, None)
+        if phantom:
+            state["positions"] = positions
+            _save_state(state)
 
     # ---- exits ----
     to_sell = []

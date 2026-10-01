@@ -287,7 +287,8 @@ def rebalance(execute: bool) -> None:
     except Exception as e:
         print(f"\nCannot reach Robinhood ({e}). Showing target only.")
         return
-    positions = ex.rh.account.get_open_stock_positions(account_number=ACCOUNT) or []
+    from .live_executor import all_positions
+    positions = all_positions(ex.rh, ACCOUNT)
     held = {}
     for p in positions:
         q = float(p.get("quantity") or 0)
