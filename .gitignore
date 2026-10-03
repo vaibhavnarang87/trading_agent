@@ -7,3 +7,4 @@ __pycache__/
 # Never publish these to the public repo/site.
 data/private/
 .mcp.json
+transfer/

@@ -595,7 +595,9 @@ def run_setup() -> None:
     path = env_path()
     if not os.path.exists(path):
         secret = base64.b32encode(secrets.token_bytes(20)).decode().rstrip("=")
-        init_env_file(secret, account_number="899433726")
+        # Never hardcode the real account number: this repo is public.
+        init_env_file(secret, account_number=os.environ.get(
+            "TRADING_ACCOUNT_NUMBER", "PAPER-ACCOUNT"))
         print(f"Created {path}")
         print("ADD THIS 2FA SECRET to Google Authenticator now (scan/paste):")
         print(f"  otpauth://totp/ticket-console?secret={secret}&issuer=trading_agent\n")
@@ -643,7 +645,8 @@ def main() -> None:
         return
     if "--init-env" in sys.argv:
         secret = base64.b32encode(secrets.token_bytes(20)).decode().rstrip("=")
-        path = init_env_file(secret, account_number="899433726")
+        path = init_env_file(secret, account_number=os.environ.get(
+            "TRADING_ACCOUNT_NUMBER", "PAPER-ACCOUNT"))
         print(f"Created {path} (owner-only).")
         print("Add the 2FA secret to your authenticator app (scan/paste):")
         print(f"  otpauth://totp/ticket-console?secret={secret}&issuer=trading_agent")

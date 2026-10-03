@@ -47,7 +47,10 @@ PRIVATE = os.path.join(HERE, "data", "private")
 STATE = os.path.join(PRIVATE, "clone_state.json")
 
 CIK = "0001067983"                      # Berkshire Hathaway Inc
-UA = {"User-Agent": "trading_agent research vaibhavnarang87@gmail.com"}
+# SEC requires a contact address in the User-Agent. Keep it out of the source
+# of a public repo: set SEC_CONTACT_EMAIL in ~/.trading_agent.env.
+UA = {"User-Agent": "trading_agent research "
+      + os.environ.get("SEC_CONTACT_EMAIL", "contact@example.com")}
 TOP_N = 10
 DOLLARS_PER_NAME = float(os.environ.get("CLONE_DOLLARS_PER_NAME", "200"))
 
