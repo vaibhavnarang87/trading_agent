@@ -1,0 +1,44 @@
+############################################################
+DAILY BRIEFING — 2026-11-07   (information, not advice)
+############################################################
+
+STRATEGY SIGNAL (SPY intraday momentum, paper):
+  SPY 2026-11-06: first30 +1.033% -> LONG (euphoria=False)
+
+WATCHLIST (ranked by what's notable today):
+------------------------------------------------------------
+AAPL   $342.37     93% of range  [near 52w HIGH]
+        beat rate 100%
+GOOGL  $284.78     9% of range  [near 52w LOW]
+        beat rate 100%
+AMZN   $259.30     71% of range
+        beat rate 86%
+MSFT   $530.61     88% of range  [near 52w HIGH]
+        beat rate 100%
+NKE    $38.59      15% of range  [near 52w LOW]
+        beat rate 100%
+TSLA   $358.22     31% of range
+------------------------------------------------------------
+Reminder: crowd spikes are a RISK flag, not a buy signal. Earnings
+dates mean volatility, not direction. You decide and place trades.
+############################################################
+
+SCREEN — quality-dip candidates flagged for review (research, not advice):
+------------------------------------------------------------
+GOOGL  $284.78     beaten down (9% of 52w range <= 30%); quality earnings (beat rate 100% >= 75%)
+NKE    $38.59      beaten down (15% of 52w range <= 30%); quality earnings (beat rate 100% >= 75%)
+------------------------------------------------------------
+A screen hit is a prompt to do your own research, not a recommendation
+to buy. Criteria are fixed and shown above; you decide and place trades.
+
+UNIVERSE SCAN — quality dips beyond the watchlist (research, not advice):
+------------------------------------------------------------
+AVGO   $293.69     beaten down (1% of 52w range <= 30%); quality earnings (beat rate 100% >= 75%); outside watchlist (universe scan)
+BAC    $49.42      beaten down (17% of 52w range <= 30%); quality earnings (beat rate 75% >= 75%); outside watchlist (universe scan)
+BKNG   $160.66     beaten down (18% of 52w range <= 30%); quality earnings (beat rate 100% >= 75%); outside watchlist (universe scan)
+CAT    $558.63     beaten down (3% of 52w range <= 30%); quality earnings (beat rate 100% >= 75%); outside watchlist (universe scan)
+GS     $865.82     beaten down (28% of 52w range <= 30%); quality earnings (beat rate 100% >= 75%); outside watchlist (universe scan)
+------------------------------------------------------------
+Scanned ~102 large caps with fixed, shown criteria. A hit
+is a research prompt, not a recommendation. You decide and place trades.
+############################################################
